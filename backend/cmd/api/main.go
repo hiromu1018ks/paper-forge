@@ -7,7 +7,11 @@ import (
 	"strings"
 
 	"github.com/gin-contrib/cors"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
+
+	"github.com/yourusername/paper-forge/internal/auth"
 	"github.com/yourusername/paper-forge/internal/config"
 )
 
@@ -24,6 +28,17 @@ func main() {
 	// Ginルーターの初期化（デフォルトミドルウェア: Logger, Recovery）
 	router := gin.Default()
 
+	// セッションストアの設定（クッキー署名鍵は必須）
+	store := cookie.NewStore([]byte(cfg.SessionSecret))
+	store.Options(sessions.Options{
+		Path:     "/",
+		MaxAge:   auth.SessionMaxAgeSeconds(),
+		HttpOnly: true,
+		Secure:   cfg.GinMode == gin.ReleaseMode,
+		SameSite: http.SameSiteStrictMode,
+	})
+	router.Use(sessions.Sessions(auth.SessionCookieName, store))
+
 	// CORSミドルウェアの設定
 	corsConfig := cors.DefaultConfig()
 	// CORS許可オリジンを設定（カンマ区切りの文字列を配列に変換）
@@ -37,6 +52,8 @@ func main() {
 		"Authorization",
 		"X-CSRF-Token", // CSRF保護用ヘッダー
 	}
+	// フロントエンドがレスポンスヘッダーから CSRF トークンを読み取れるように公開
+	corsConfig.ExposeHeaders = []string{"X-CSRF-Token"}
 	router.Use(cors.New(corsConfig))
 
 	// ルーティングの設定
@@ -50,38 +67,6 @@ func main() {
 	}
 }
 
-// setupRoutes はAPIのルーティングを設定します。
-func setupRoutes(router *gin.Engine, cfg *config.Config) {
-	// ヘルスチェックエンドポイント
-	router.GET("/health", handleHealth)
-
-	// APIグループ
-	api := router.Group("/api")
-	{
-		// 認証エンドポイント（ダミー実装）
-		auth := api.Group("/auth")
-		{
-			auth.POST("/login", handleLogin)
-			auth.POST("/logout", handleLogout)
-		}
-
-		// TODO: PDF操作エンドポイント（今後実装）
-		// pdf := api.Group("/pdf")
-		// {
-		// 	pdf.POST("/merge", handleMerge)
-		// 	pdf.POST("/split", handleSplit)
-		// 	pdf.POST("/reorder", handleReorder)
-		// 	pdf.POST("/optimize", handleOptimize)
-		// }
-
-		// TODO: ジョブ管理エンドポイント（今後実装）
-		// jobs := api.Group("/jobs")
-		// {
-		// 	jobs.GET("/:id", handleGetJob)
-		// }
-	}
-}
-
 // handleHealth はヘルスチェックエンドポイントのハンドラーです。
 func handleHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
@@ -91,52 +76,31 @@ func handleHealth(c *gin.Context) {
 	})
 }
 
-// handleLogin はログインエンドポイントのダミーハンドラーです。
-// TODO: 実際の認証ロジックを実装する
-func handleLogin(c *gin.Context) {
-	// リクエストボディの構造体
-	type LoginRequest struct {
-		Username string `json:"username" binding:"required"`
-		Password string `json:"password" binding:"required"`
+// setupRoutes は API グループと認証周りの配線を行います。
+func setupRoutes(router *gin.Engine, cfg *config.Config) {
+	// まずは誰でも叩けるヘルスチェックを登録
+	router.GET("/health", handleHealth)
+
+	authManager := auth.NewManager(cfg)
+
+	api := router.Group("/api")
+	{
+		authRoutes := api.Group("/auth")
+		{
+			// ログイン時はセッション未生成なので CSRF 検証は不要
+			authRoutes.POST("/login", authManager.Login)
+			authRoutes.POST("/logout",
+				authManager.RequireLogin(),
+				authManager.VerifyCSRF(),
+				authManager.Logout,
+			)
+		}
+
+		// 今後追加する API はここにぶら下げる
+		protected := api.Group("")
+		protected.Use(authManager.RequireLogin(), authManager.VerifyCSRF())
+		{
+			// TODO: /api/pdf/* 系の実装を追加する
+		}
 	}
-
-	var req LoginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    "INVALID_INPUT",
-			"message": "Invalid request format",
-		})
-		return
-	}
-
-	// TODO: 実際のパスワード検証（bcrypt）を実装
-	// TODO: セッションCookieの発行
-	// TODO: CSRFトークンの生成と返却
-
-	log.Printf("Login attempt: username=%s", req.Username)
-
-	// ダミーレスポンス（現在は常に成功）
-	c.Header("X-CSRF-Token", "dummy-csrf-token")
-	c.Status(http.StatusNoContent)
 }
-
-// handleLogout はログアウトエンドポイントのダミーハンドラーです。
-// TODO: セッション無効化の実装
-func handleLogout(c *gin.Context) {
-	// TODO: セッションCookieの無効化
-	// TODO: CSRFトークンの無効化
-
-	log.Println("Logout request received")
-
-	c.Status(http.StatusNoContent)
-}
-
-// 注記:
-// このファイルはAPIサーバーの雛形実装です。
-// 以下の機能は今後実装予定:
-// - bcryptによるパスワード検証
-// - セッション管理（gin-contrib/sessions）
-// - CSRF保護（gin-csrf または手動実装）
-// - レート制限（認証試行回数制限）
-// - PDF操作API（internal/pdfパッケージから呼び出し）
-// - ジョブ管理API（internal/jobsパッケージから呼び出し）

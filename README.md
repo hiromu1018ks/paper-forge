@@ -164,6 +164,19 @@ curl http://localhost:8080/health
 # {"service":"paper-forge-api","status":"ok","version":"0.1.0"}
 ```
 
+**ログインテスト:**
+```bash
+curl -i -X POST http://localhost:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"<APP_USERNAME>","password":"<平文パスワード>"}'
+# 204 No Content と共に X-CSRF-Token ヘッダーが返り、セッションCookieが保存されます
+
+# 返ってきた Cookie と X-CSRF-Token を使って保護された API を叩く例
+curl -i -X POST http://localhost:8080/api/auth/logout \
+  -H "X-CSRF-Token: <取得したトークン>" \
+  -H "Cookie: pf_session=<レスポンスの Set-Cookie 値>"
+```
+
 ## 📝 開発コマンド
 
 ### フロントエンド
