@@ -1,4 +1,4 @@
-import axios, { AxiosError } from 'axios';
+import axios, { AxiosError, AxiosHeaders } from 'axios';
 
 import { useAuthStore } from '@/stores/authStore';
 
@@ -12,10 +12,13 @@ apiClient.interceptors.request.use((config) => {
   if (method && method !== 'GET' && method !== 'HEAD') {
     const token = useAuthStore.getState().csrfToken;
     if (token) {
-      config.headers = {
-        ...config.headers,
-        'X-CSRF-Token': token,
-      };
+      if (config.headers instanceof AxiosHeaders) {
+        config.headers.set('X-CSRF-Token', token);
+      } else {
+        const headers = AxiosHeaders.from(config.headers ?? {});
+        headers.set('X-CSRF-Token', token);
+        config.headers = headers;
+      }
     }
   }
   return config;
@@ -44,15 +47,21 @@ export interface ApiErrorPayload {
 }
 
 export class ApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly code: string,
-    readonly payload?: ApiErrorPayload,
-    readonly retryAfterSeconds?: number,
-  ) {
+  readonly status: number;
+
+  readonly code: string;
+
+  readonly payload?: ApiErrorPayload;
+
+  readonly retryAfterSeconds?: number;
+
+  constructor(message: string, status: number, code: string, payload?: ApiErrorPayload, retryAfterSeconds?: number) {
     super(message);
     this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    this.payload = payload;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 

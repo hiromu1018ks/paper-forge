@@ -12,12 +12,12 @@
   実装方針: `docs/04_api_spec.md` の `/auth/login` と `/auth/logout` を実装し、`APP_USERNAME` と `APP_PASSWORD_HASH` を使って bcrypt 照合する。`gin-contrib/sessions` で `Secure; HttpOnly; SameSite=Strict` なクッキーを発行し、`github.com/utrack/gin-csrf` で `X-CSRF-Token` を返す。参照: `docs/01_requirements.md`, `docs/04_api_spec.md`.
 - [x] PDF結合API（同期処理）の実装  
   実装方針: 要件定義の 5.1 に従い `POST /pdf/merge` の `multipart/form-data` を実装し、アップロードファイルを一時ディレクトリへ保存して pdfcpu の Merge API を呼び出す。処理前にファイルサイズとページ数を検証し、生成ファイルはストリームで返す。`JOB_EXPIRE_MINUTES` に従って一時ファイル削除ジョブを仕込む。参照: `docs/01_requirements.md`, `docs/04_api_spec.md`.
-- [ ] フロントエンドのログイン〜結合フロー  
+- [x] フロントエンドのログイン〜結合フロー  
   実装方針: 画面仕様 S-01〜S-03 をもとにログインフォーム、ダッシュボード、結合画面を作成し、Zustand で `auth` と `workspace` ストアを用意する。Axios で `/auth/login` と `/pdf/merge` を呼び出し、プログレスバーは同期完了までの疑似ステップ (`load/process/write`) を表示する。参照: `docs/03_ui_spec.md`, `docs/04_api_spec.md`.  
-  進捗メモ (2025-10-18): `auth` ストアとログイン画面、`/pdf/merge` 連携済み。結果保持/ワークスペース共有は次フェーズ対応。
-- [ ] ワークスペース画面と結果保持  
+  完了メモ (2025-10-18): React Router を導入して `/login` → `/app` のフローを保護し、Mergeタブでの結合完了時に疑似進捗とワークスペース保存を含む一連の体験を実装。ログアウト時はストアと永続化データをクリア。
+- [x] ワークスペース画面と結果保持  
   実装方針: S-07 を踏まえて結果プレビューとダウンロードボタンを持つワークスペース画面を実装し、`workspace.lastResult` に結合結果の `Blob` または URL を保持する。続けて処理する導線（圧縮/分割/順序）にはプレースホルダーを配置して今後の拡張に備える。参照: `docs/03_ui_spec.md`.  
-  進捗メモ (2025-10-18): Mergeタブ内でダウンロードモーダルを表示する暫定対応のみ。専用ページ・ストアは未実装。
+  完了メモ (2025-10-18): `workspaceStore` を新設し、結果 Blob を IndexedDB に永続化。S-07 準拠の `WorkspacePage` を追加し、プレビュー・ダウンロード・続きの処理ボタンを実装。
 
 ## フォローアップ候補（開発サーバー安定後）
 

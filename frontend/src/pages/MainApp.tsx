@@ -1,24 +1,49 @@
 /**
  * メインアプリケーション (Tailwind CSS版)
  *
- * design.htmlのタブナビゲーションデザインを踏襲
+ * design.html のタブナビゲーションデザインを踏襲しつつ、
+ * React Router から渡される状態に応じて初期タブや遷移先を切り替える。
  */
 
-import { useState } from 'react';
-import { useAuthStore } from '@/stores/authStore';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+
 import { logout as logoutApi } from '@/api/auth';
 import { MergeTab } from '@/components/tabs/MergeTab';
+import { OptimizeTab } from '@/components/tabs/OptimizeTab';
 import { ReorderTab } from '@/components/tabs/ReorderTab';
 import { SplitTab } from '@/components/tabs/SplitTab';
-import { OptimizeTab } from '@/components/tabs/OptimizeTab';
+import { useAuthStore } from '@/stores/authStore';
+import { useWorkspaceStore } from '@/stores/workspaceStore';
 
 type TabType = 'merge' | 'reorder' | 'split' | 'optimize';
 
+const TAB_LABELS: Record<TabType, string> = {
+  merge: '結合',
+  reorder: 'ページ順入替',
+  split: '分割',
+  optimize: '圧縮',
+};
+
 export const MainApp = () => {
-  const [activeTab, setActiveTab] = useState<TabType>('merge');
+  const location = useLocation();
+  const navigate = useNavigate();
+  const state = location.state as { activeTab?: TabType } | undefined;
+  const initialTab = useMemo<TabType>(() => state?.activeTab ?? 'merge', [state]);
+
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const user = useAuthStore((state) => state.user);
-  const logout = useAuthStore((state) => state.logout);
+  const user = useAuthStore((current) => current.user);
+  const logout = useAuthStore((current) => current.logout);
+  const lastResult = useWorkspaceStore((current) => current.lastResult);
+  const clearWorkspace = useWorkspaceStore((current) => current.clearAll);
+
+  useEffect(() => {
+    if (state?.activeTab) {
+      setActiveTab(state.activeTab);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.pathname, navigate, state]);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -27,14 +52,20 @@ export const MainApp = () => {
     } catch (error) {
       console.error('ログアウトAPIエラー:', error);
     } finally {
+      try {
+        await clearWorkspace();
+      } catch (workspaceError) {
+        console.warn('ワークスペースのクリアに失敗しました:', workspaceError);
+      }
       logout();
+      navigate('/login', { replace: true });
     }
   };
 
-  const tabs = [
+  const tabs: { id: TabType; label: string; icon: ReactNode }[] = [
     {
-      id: 'merge' as const,
-      label: '結合',
+      id: 'merge',
+      label: TAB_LABELS.merge,
       icon: (
         <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
@@ -47,8 +78,8 @@ export const MainApp = () => {
       ),
     },
     {
-      id: 'reorder' as const,
-      label: 'ページ順入替',
+      id: 'reorder',
+      label: TAB_LABELS.reorder,
       icon: (
         <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
@@ -56,8 +87,8 @@ export const MainApp = () => {
       ),
     },
     {
-      id: 'split' as const,
-      label: '分割',
+      id: 'split',
+      label: TAB_LABELS.split,
       icon: (
         <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
@@ -65,8 +96,8 @@ export const MainApp = () => {
       ),
     },
     {
-      id: 'optimize' as const,
-      label: '圧縮',
+      id: 'optimize',
+      label: TAB_LABELS.optimize,
       icon: (
         <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -77,7 +108,6 @@ export const MainApp = () => {
 
   return (
     <div className="min-h-full bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-4">
@@ -95,19 +125,26 @@ export const MainApp = () => {
               <h1 className="text-xl font-semibold text-gray-900">Paper Forge</h1>
               {user && <span className="ml-4 text-sm text-gray-500">ようこそ、{user.username}さん</span>}
             </div>
-            <button
-              onClick={handleLogout}
-              disabled={isLoggingOut}
-              className="text-gray-500 hover:text-gray-700 px-3 py-2 rounded-md text-sm font-medium disabled:opacity-50"
-            >
-              {isLoggingOut ? 'ログアウト中...' : 'ログアウト'}
-            </button>
+            <div className="flex items-center space-x-3">
+              <button
+                onClick={() => navigate('/workspace')}
+                className="text-blue-500 hover:text-blue-700 px-3 py-2 rounded-md text-sm font-medium border border-blue-200 hover:border-blue-400 transition-colors"
+              >
+                ワークスペース{lastResult ? '' : ' (空)'}
+              </button>
+              <button
+                onClick={handleLogout}
+                disabled={isLoggingOut}
+                className="text-gray-500 hover:text-gray-700 px-3 py-2 rounded-md text-sm font-medium disabled:opacity-50"
+              >
+                {isLoggingOut ? 'ログアウト中...' : 'ログアウト'}
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Tab Navigation */}
         <div className="mb-8">
           <nav className="flex space-x-8" aria-label="Tabs">
             {tabs.map((tab) => (
@@ -127,7 +164,6 @@ export const MainApp = () => {
           </nav>
         </div>
 
-        {/* Tab Content */}
         <div>
           {activeTab === 'merge' && <MergeTab />}
           {activeTab === 'reorder' && <ReorderTab />}

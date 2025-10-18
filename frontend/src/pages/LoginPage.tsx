@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useMutation } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { login as loginApi } from '@/api/auth';
 import { ApiError } from '@/api/httpClient';
 import { useAuthStore } from '@/stores/authStore';
@@ -19,6 +20,7 @@ export const LoginPage = () => {
   const loginFeedback = useAuthStore((state) => state.loginFeedback);
   const recordLoginFailure = useAuthStore((state) => state.recordLoginFailure);
   const clearLoginFeedback = useAuthStore((state) => state.clearLoginFeedback);
+  const navigate = useNavigate();
 
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -46,6 +48,7 @@ export const LoginPage = () => {
       login({ username: result.username, csrfToken: result.csrfToken });
       clearLoginFeedback();
       setFormError(null);
+      navigate('/app', { replace: true });
     },
     onError: (error: unknown) => {
       const apiError = error instanceof ApiError ? error : undefined;

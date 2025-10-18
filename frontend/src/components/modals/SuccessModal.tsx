@@ -8,9 +8,10 @@ interface SuccessModalProps {
   blob: Blob;
   onClose: () => void;
   onNewProcess: () => void;
+  onViewWorkspace?: () => void;
 }
 
-export const SuccessModal = ({ isOpen, filename, blob, onClose, onNewProcess }: SuccessModalProps) => {
+export const SuccessModal = ({ isOpen, filename, blob, onClose, onNewProcess, onViewWorkspace }: SuccessModalProps) => {
   if (!isOpen) return null;
 
   const handleDownload = () => {
@@ -45,6 +46,14 @@ export const SuccessModal = ({ isOpen, filename, blob, onClose, onNewProcess }: 
             >
               ダウンロード
             </button>
+            {onViewWorkspace && (
+              <button
+                onClick={onViewWorkspace}
+                className="px-4 py-2 bg-blue-500 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-300"
+              >
+                ワークスペースを開く
+              </button>
+            )}
             <button
               onClick={() => {
                 onClose();
