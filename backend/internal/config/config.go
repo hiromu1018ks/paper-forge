@@ -28,6 +28,15 @@ type Config struct {
 	MaxPages         int   // 単一ファイルの最大ページ数
 	JobExpireMinutes int   // ジョブの有効期限（分）
 
+	// ジョブ/キュー設定
+	QueueRedisURL       string // Asynq用Redis接続URL
+	AsyncThresholdBytes int64  // 同期処理から非同期へ切り替えるサイズ閾値
+	AsyncThresholdPages int    // 同期処理から非同期へ切り替えるページ閾値
+	JobResultBaseURL    string // 結果ファイル取得用のベースURL（署名URL等を生成する場合に使用）
+
+	// PDF処理設定
+	GhostscriptPath string // Ghostscript実行ファイルのパス
+
 	// GCP設定（本番環境用）
 	GCPProject     string // GCPプロジェクトID
 	GCSBucket      string // Google Cloud Storageバケット名
@@ -58,6 +67,15 @@ func Load() (*Config, error) {
 		MaxPages:         getEnvAsInt("MAX_PAGES", 200),
 		JobExpireMinutes: getEnvAsInt("JOB_EXPIRE_MINUTES", 10),
 
+		// ジョブ/キュー設定
+		QueueRedisURL:       getEnv("QUEUE_REDIS_URL", "redis://127.0.0.1:6379/0"),
+		AsyncThresholdBytes: getEnvAsInt64("ASYNC_THRESHOLD_BYTES", 50*1024*1024), // 50MB
+		AsyncThresholdPages: getEnvAsInt("ASYNC_THRESHOLD_PAGES", 120),
+		JobResultBaseURL:    getEnv("JOB_RESULT_BASE_URL", ""),
+
+		// PDF処理設定
+		GhostscriptPath: getEnv("GHOSTSCRIPT_PATH", "gs"),
+
 		// GCP設定
 		GCPProject:     getEnv("GCP_PROJECT", ""),
 		GCSBucket:      getEnv("GCS_BUCKET", ""),
@@ -85,6 +103,12 @@ func (c *Config) Validate() error {
 		}
 		if c.SessionSecret == "" {
 			return fmt.Errorf("SESSION_SECRET is required in release mode")
+		}
+		if c.QueueRedisURL == "" {
+			return fmt.Errorf("QUEUE_REDIS_URL is required in release mode")
+		}
+		if c.GhostscriptPath == "" {
+			return fmt.Errorf("GHOSTSCRIPT_PATH is required in release mode")
 		}
 	}
 

@@ -15,13 +15,50 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// MergeService は PDF 結合サービスのインターフェースです。
+// JobRunner はジョブを実行できるサービスが実装します。
+type JobRunner interface {
+	RunJob(ctx context.Context, jobID string, reporter ProgressReporter) (*Result, error)
+	DiscardJob(jobID string) error
+}
+
+// MergeService は結合ジョブの準備と実行を提供します。
 type MergeService interface {
-	MergeMultipart(ctx context.Context, files []*multipart.FileHeader, order []int) (*MergeResult, error)
+	JobRunner
+	PrepareMergeJob(ctx context.Context, files []*multipart.FileHeader, order []int) (*JobManifest, error)
+}
+
+// ReorderService はページ順入替ジョブの準備と実行を提供します。
+type ReorderService interface {
+	JobRunner
+	PrepareReorderJob(ctx context.Context, file *multipart.FileHeader, order []int) (*JobManifest, error)
+}
+
+// SplitService は分割ジョブの準備と実行を提供します。
+type SplitService interface {
+	JobRunner
+	PrepareSplitJob(ctx context.Context, file *multipart.FileHeader, rangesExpr string) (*JobManifest, error)
+}
+
+// OptimizeService は圧縮ジョブの準備と実行を提供します。
+type OptimizeService interface {
+	JobRunner
+	PrepareOptimizeJob(ctx context.Context, file *multipart.FileHeader, preset OptimizePreset) (*JobManifest, error)
+}
+
+// JobScheduler はジョブを非同期キューに投入するためのインターフェースです。
+type JobScheduler interface {
+	Schedule(ctx context.Context, op OperationType, jobID string) error
+}
+
+// HandlerOptions は同期/非同期切り替えのための設定です。
+type HandlerOptions struct {
+	Scheduler           JobScheduler
+	AsyncThresholdBytes int64
+	AsyncThresholdPages int
 }
 
 // MergeHandler は POST /api/pdf/merge のハンドラーを返します。
-func MergeHandler(svc MergeService) gin.HandlerFunc {
+func MergeHandler(svc MergeService, opts HandlerOptions) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		form, err := c.MultipartForm()
 		if err != nil {
@@ -54,27 +91,242 @@ func MergeHandler(svc MergeService) gin.HandlerFunc {
 			return
 		}
 
-		result, err := svc.MergeMultipart(c.Request.Context(), files, order)
+		manifest, err := svc.PrepareMergeJob(c.Request.Context(), files, order)
+		if err != nil {
+			respondWithError(c, err)
+			return
+		}
+
+		if shouldProcessAsync(manifest, opts) {
+			if err := opts.Scheduler.Schedule(c.Request.Context(), manifest.Operation, manifest.JobID); err != nil {
+				if cleanupErr := svc.DiscardJob(manifest.JobID); cleanupErr != nil {
+					err = fmt.Errorf("%w (cleanup failed: %v)", err, cleanupErr)
+				}
+				respondWithError(c, err)
+				return
+			}
+			c.JSON(http.StatusAccepted, gin.H{"jobId": manifest.JobID})
+			return
+		}
+
+		result, err := svc.RunJob(c.Request.Context(), manifest.JobID, nil)
 		if err != nil {
 			respondWithError(c, err)
 			return
 		}
 		defer result.Cleanup()
 
-		file, err := os.Open(result.OutputPath)
+		if err := streamResult(c, result, "結合結果の読み込みに失敗しました"); err != nil {
+			respondWithError(c, err)
+		}
+	}
+}
+
+// ReorderHandler は POST /api/pdf/reorder のハンドラーを返します。
+func ReorderHandler(svc ReorderService, opts HandlerOptions) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		form, err := c.MultipartForm()
 		if err != nil {
-			respondWithError(c, fmt.Errorf("結合結果の読み込みに失敗しました: %w", err))
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_INPUT",
+				"message": "multipart/form-data でPDFファイルを送信してください。",
+			})
 			return
 		}
-		defer file.Close()
+		defer form.RemoveAll()
 
-		encodedName := url.PathEscape(result.OutputFilename)
-		c.Header("Content-Type", "application/pdf")
-		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", result.OutputFilename, encodedName))
-		c.Header("Cache-Control", "no-store")
-		c.Header("X-Job-Id", result.JobID)
-		c.DataFromReader(http.StatusOK, result.OutputSize, "application/pdf", file, nil)
+		file, err := extractSingleFile(form)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_INPUT",
+				"message": err.Error(),
+			})
+			return
+		}
+
+		order, err := parseOrder(c)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_INPUT",
+				"message": err.Error(),
+			})
+			return
+		}
+
+		manifest, err := svc.PrepareReorderJob(c.Request.Context(), file, order)
+		if err != nil {
+			respondWithError(c, err)
+			return
+		}
+
+		if shouldProcessAsync(manifest, opts) {
+			if err := opts.Scheduler.Schedule(c.Request.Context(), manifest.Operation, manifest.JobID); err != nil {
+				if cleanupErr := svc.DiscardJob(manifest.JobID); cleanupErr != nil {
+					err = fmt.Errorf("%w (cleanup failed: %v)", err, cleanupErr)
+				}
+				respondWithError(c, err)
+				return
+			}
+			c.JSON(http.StatusAccepted, gin.H{"jobId": manifest.JobID})
+			return
+		}
+
+		result, err := svc.RunJob(c.Request.Context(), manifest.JobID, nil)
+		if err != nil {
+			respondWithError(c, err)
+			return
+		}
+		defer result.Cleanup()
+
+		if err := streamResult(c, result, "ページ順入替結果の読み込みに失敗しました"); err != nil {
+			respondWithError(c, err)
+		}
 	}
+}
+
+// SplitHandler は POST /api/pdf/split のハンドラーを返します。
+func SplitHandler(svc SplitService, opts HandlerOptions) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		form, err := c.MultipartForm()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_INPUT",
+				"message": "multipart/form-data でPDFファイルを送信してください。",
+			})
+			return
+		}
+		defer form.RemoveAll()
+
+		file, err := extractSingleFile(form)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_INPUT",
+				"message": err.Error(),
+			})
+			return
+		}
+
+		rangesExpr := strings.TrimSpace(c.PostForm("ranges"))
+		if rangesExpr == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_INPUT",
+				"message": "分割するページ範囲を指定してください。",
+			})
+			return
+		}
+
+		manifest, err := svc.PrepareSplitJob(c.Request.Context(), file, rangesExpr)
+		if err != nil {
+			respondWithError(c, err)
+			return
+		}
+
+		if shouldProcessAsync(manifest, opts) {
+			if err := opts.Scheduler.Schedule(c.Request.Context(), manifest.Operation, manifest.JobID); err != nil {
+				if cleanupErr := svc.DiscardJob(manifest.JobID); cleanupErr != nil {
+					err = fmt.Errorf("%w (cleanup failed: %v)", err, cleanupErr)
+				}
+				respondWithError(c, err)
+				return
+			}
+			c.JSON(http.StatusAccepted, gin.H{"jobId": manifest.JobID})
+			return
+		}
+
+		result, err := svc.RunJob(c.Request.Context(), manifest.JobID, nil)
+		if err != nil {
+			respondWithError(c, err)
+			return
+		}
+		defer result.Cleanup()
+
+		if err := streamResult(c, result, "分割結果の読み込みに失敗しました"); err != nil {
+			respondWithError(c, err)
+		}
+	}
+}
+
+// OptimizeHandler は POST /api/pdf/optimize のハンドラーを返します。
+func OptimizeHandler(svc OptimizeService, opts HandlerOptions) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		form, err := c.MultipartForm()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_INPUT",
+				"message": "multipart/form-data でPDFファイルを送信してください。",
+			})
+			return
+		}
+		defer form.RemoveAll()
+
+		file, err := extractSingleFile(form)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_INPUT",
+				"message": err.Error(),
+			})
+			return
+		}
+
+		preset := OptimizePreset(strings.TrimSpace(c.PostForm("preset")))
+
+		manifest, err := svc.PrepareOptimizeJob(c.Request.Context(), file, preset)
+		if err != nil {
+			respondWithError(c, err)
+			return
+		}
+
+		if shouldProcessAsync(manifest, opts) {
+			if err := opts.Scheduler.Schedule(c.Request.Context(), manifest.Operation, manifest.JobID); err != nil {
+				if cleanupErr := svc.DiscardJob(manifest.JobID); cleanupErr != nil {
+					err = fmt.Errorf("%w (cleanup failed: %v)", err, cleanupErr)
+				}
+				respondWithError(c, err)
+				return
+			}
+			c.JSON(http.StatusAccepted, gin.H{"jobId": manifest.JobID})
+			return
+		}
+
+		result, err := svc.RunJob(c.Request.Context(), manifest.JobID, nil)
+		if err != nil {
+			respondWithError(c, err)
+			return
+		}
+		defer result.Cleanup()
+
+		if err := streamResult(c, result, "圧縮結果の読み込みに失敗しました"); err != nil {
+			respondWithError(c, err)
+		}
+	}
+}
+
+func shouldProcessAsync(manifest *JobManifest, opts HandlerOptions) bool {
+	if manifest == nil || opts.Scheduler == nil {
+		return false
+	}
+
+	if opts.AsyncThresholdBytes > 0 {
+		var total int64
+		for _, f := range manifest.Files {
+			total += f.Size
+		}
+		if total > opts.AsyncThresholdBytes {
+			return true
+		}
+	}
+
+	if opts.AsyncThresholdPages > 0 {
+		var total int
+		for _, f := range manifest.Files {
+			total += f.Pages
+		}
+		if total > opts.AsyncThresholdPages {
+			return true
+		}
+	}
+
+	return false
 }
 
 func parseOrder(c *gin.Context) ([]int, error) {
@@ -129,4 +381,48 @@ func respondWithError(c *gin.Context, err error) {
 			"message": "サーバー内部でエラーが発生しました。",
 		})
 	}
+}
+
+func extractSingleFile(form *multipart.Form) (*multipart.FileHeader, error) {
+	if form == nil {
+		return nil, errors.New("PDFファイルを選択してください。")
+	}
+	if file := form.File["file"]; len(file) > 0 {
+		return file[0], nil
+	}
+	if file := form.File["file[]"]; len(file) > 0 {
+		return file[0], nil
+	}
+	files := form.File["files"]
+	if len(files) > 0 {
+		return files[0], nil
+	}
+	if alt := form.File["files[]"]; len(alt) > 0 {
+		return alt[0], nil
+	}
+	return nil, errors.New("PDFファイルを選択してください。")
+}
+
+func streamResult(c *gin.Context, result *Result, readErrMsg string) error {
+	file, err := os.Open(result.OutputPath)
+	if err != nil {
+		return fmt.Errorf("%s: %w", readErrMsg, err)
+	}
+	defer file.Close()
+
+	contentType := "application/octet-stream"
+	switch result.ResultKind {
+	case ResultKindPDF:
+		contentType = "application/pdf"
+	case ResultKindZIP:
+		contentType = "application/zip"
+	}
+
+	encodedName := url.PathEscape(result.OutputFilename)
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", result.OutputFilename, encodedName))
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Job-Id", result.JobID)
+	c.DataFromReader(http.StatusOK, result.OutputSize, contentType, file, nil)
+	return nil
 }

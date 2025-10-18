@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/yourusername/paper-forge/internal/auth"
 	"github.com/yourusername/paper-forge/internal/config"
+	"github.com/yourusername/paper-forge/internal/jobs"
 	"github.com/yourusername/paper-forge/internal/pdf"
 )
 
@@ -57,8 +59,18 @@ func main() {
 	corsConfig.ExposeHeaders = []string{"X-CSRF-Token"}
 	router.Use(cors.New(corsConfig))
 
+	pdfService := pdf.NewService(cfg)
+	jobManager, err := setupJobs(cfg, pdfService)
+	if err != nil {
+		log.Fatalf("Failed to set up jobs: %v", err)
+	}
+	defer func() {
+		_ = jobManager.Shutdown(context.Background())
+	}()
+	jobManager.StartWorkers()
+
 	// ルーティングの設定
-	setupRoutes(router, cfg)
+	setupRoutes(router, cfg, pdfService, jobManager)
 
 	// サーバーの起動
 	addr := ":" + cfg.Port
@@ -78,12 +90,11 @@ func handleHealth(c *gin.Context) {
 }
 
 // setupRoutes は API グループと認証周りの配線を行います。
-func setupRoutes(router *gin.Engine, cfg *config.Config) {
+func setupRoutes(router *gin.Engine, cfg *config.Config, pdfService *pdf.Service, jobManager *jobs.Manager) {
 	// まずは誰でも叩けるヘルスチェックを登録
 	router.GET("/health", handleHealth)
 
 	authManager := auth.NewManager(cfg)
-	pdfService := pdf.NewService(cfg)
 
 	// 大きなPDFを扱うため、multipartの読み込み上限を設定値に合わせて引き上げる
 	router.MaxMultipartMemory = pdf.MaxUploadTotalBytes + cfg.MaxFileSize
@@ -105,10 +116,23 @@ func setupRoutes(router *gin.Engine, cfg *config.Config) {
 		protected := api.Group("")
 		protected.Use(authManager.RequireLogin(), authManager.VerifyCSRF())
 		{
+			scheduler := &pdfJobScheduler{manager: jobManager}
+			handlerOpts := pdf.HandlerOptions{
+				Scheduler:           scheduler,
+				AsyncThresholdBytes: cfg.AsyncThresholdBytes,
+				AsyncThresholdPages: cfg.AsyncThresholdPages,
+			}
+
 			pdfRoutes := protected.Group("/pdf")
 			{
-				pdfRoutes.POST("/merge", pdf.MergeHandler(pdfService))
+				pdfRoutes.POST("/merge", pdf.MergeHandler(pdfService, handlerOpts))
+				pdfRoutes.POST("/reorder", pdf.ReorderHandler(pdfService, handlerOpts))
+				pdfRoutes.POST("/split", pdf.SplitHandler(pdfService, handlerOpts))
+				pdfRoutes.POST("/optimize", pdf.OptimizeHandler(pdfService, handlerOpts))
 			}
+
+			protected.GET("/jobs/:id", jobStatusHandler(jobManager))
+			protected.GET("/jobs/:id/download", jobDownloadHandler(pdfService))
 		}
 	}
 }

@@ -1,6 +1,7 @@
 import axios, { AxiosError, AxiosHeaders } from 'axios';
 
 import { useAuthStore } from '@/stores/authStore';
+import { arrayBufferToString } from '@/utils/http';
 
 export const apiClient = axios.create({
   baseURL: '/api',
@@ -44,6 +45,7 @@ export interface ApiErrorPayload {
   code: string;
   message: string;
   remainingAttempts?: number;
+  details?: Record<string, unknown>;
 }
 
 export class ApiError extends Error {
@@ -94,6 +96,31 @@ const parseRetryAfterHeader = (headerValue: unknown): number | undefined => {
   return diffSeconds >= 0 ? diffSeconds : 0;
 };
 
+const normalizeResponseData = (data: unknown): ApiErrorPayload | undefined => {
+  if (!data) return undefined;
+  if (data instanceof ArrayBuffer) {
+    try {
+      const text = arrayBufferToString(data);
+      return text ? (JSON.parse(text) as ApiErrorPayload) : undefined;
+    } catch (parseError) {
+      console.warn('Failed to parse array buffer response as JSON:', parseError);
+      return undefined;
+    }
+  }
+  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    // Blob は同期的に扱えないためメッセージのみ返す
+    return undefined;
+  }
+  if (typeof data === 'string') {
+    try {
+      return JSON.parse(data) as ApiErrorPayload;
+    } catch {
+      return { code: 'UNKNOWN_ERROR', message: data };
+    }
+  }
+  return data as ApiErrorPayload | undefined;
+};
+
 export const toApiError = (error: unknown): ApiError => {
   if (error instanceof ApiError) {
     return error;
@@ -101,7 +128,7 @@ export const toApiError = (error: unknown): ApiError => {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError<ApiErrorPayload>;
     const status = axiosError.response?.status ?? 0;
-    const payload = axiosError.response?.data;
+    const payload = normalizeResponseData(axiosError.response?.data);
     const message = payload?.message ?? axiosError.message;
     const code = payload?.code ?? 'UNKNOWN_ERROR';
     const retryAfterHeader = axiosError.response?.headers?.['retry-after'];

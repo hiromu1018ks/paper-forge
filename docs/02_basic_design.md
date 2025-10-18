@@ -207,9 +207,10 @@
 
 * ステップ法（推奨）
 
-    * `load`(0→20) → `process`(20→80) → `write`(80→100)
-    * `process` 内でページ数に応じて分割計測
-* クライアントは `GET /jobs/{id}` を 1–2秒間隔でポーリング
+    * `queued` → `load`(0→20) → `process`(20→80) → `write`(80→100) → `completed`
+    * `process` 内でページ数に応じて分割計測し、`percent` は単調増加にする
+* クライアントは `GET /jobs/{id}` を 1–2 秒間隔でポーリングし、完了後は `/jobs/{id}/download` から成果物を取得
+* `Store` は Redis にジョブJSONを保存（キー `job:<id>`、TTL = `JOB_EXPIRE_MINUTES`）し、Asynq ワーカーは結果完了時にメタデータを格納
 
 ---
 
@@ -227,11 +228,14 @@
 * アプリ
 
     * `APP_USERNAME`, `APP_PASSWORD_HASH`
-    * `SESSION_SECRET`（128bit以上。Secret Manager で管理し、Cloud Run へ `--set-secrets` で注入。四半期ごとにバージョンを追加してローテーション）
-    * `CORS_ALLOWED_ORIGIN`（同一オリジン推奨で未使用可）
-    * `MAX_FILE_SIZE=104857600`（100MB）
-    * `MAX_PAGES=200`
-    * `JOB_EXPIRE_MINUTES=10`
+    * `SESSION_SECRET`（128bit以上。Secret Manager で管理し、Cloud Run へ `--set-secrets` で注入。四半期ごとにバージョンを追加）
+    * `CORS_ALLOWED_ORIGINS`
+    * `MAX_FILE_SIZE`, `MAX_PAGES`
+    * `JOB_EXPIRE_MINUTES`（成果物 TTL と一致）
+    * `QUEUE_REDIS_URL`（Asynq / 進捗ストア）
+    * `ASYNC_THRESHOLD_BYTES` / `ASYNC_THRESHOLD_PAGES`（同期 → 非同期の切替条件）
+    * `GHOSTSCRIPT_PATH`（ローカル環境では `gs`）
+    * `JOB_RESULT_BASE_URL`（外部ストレージを使用する場合の署名URLベース）
 * GCP
 
     * `GCP_PROJECT`, `GCS_BUCKET`

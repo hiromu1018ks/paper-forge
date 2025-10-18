@@ -9,6 +9,11 @@ export type WorkspaceSource = 'merge' | 'reorder' | 'split' | 'optimize';
 export interface WorkspaceResultMeta {
   inputFilenames?: string[];
   pageCount?: number;
+  order?: number[];
+  ranges?: string[];
+  savedBytes?: number;
+  savedPercent?: number;
+  preset?: 'standard' | 'aggressive';
 }
 
 export interface WorkspaceResult {

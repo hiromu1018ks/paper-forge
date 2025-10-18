@@ -4,18 +4,17 @@ PDF操作ツール（結合・分割・順序入替・圧縮）のWebアプリ�
 
 ## 📋 概要
 
-Paper Forgeは、PDFファイルの結合、ページ順入替、分割、圧縮を行うWebアプリケーションです。
-フロントエンドにReact + Vite、バックエンドにGo + Ginを使用し、個人利用を想定した設計になっています。
+Paper Forge は、PDFファイルの結合・ページ順入替・分割・圧縮をブラウザから実行できる Web アプリケーションです。大きなファイルは Redis + Asynq を用いた非同期ジョブで処理し、進捗を 1–2 秒間隔でポーリングして確認できます。フロントエンドは React + Vite、バックエンドは Go + Gin を採用しています。
 
 ## 🛠 技術スタック
 
 ### フロントエンド
-- **React 18** - UIライブラリ
+- **React 19** - UIライブラリ
 - **TypeScript** - 型安全性
 - **Vite** - 高速ビルドツール
 - **React Router** - ルーティング
 - **Zustand** - 状態管理
-- **TanStack Query** - データフェッチング
+- **TanStack Query** - 同期 / 非同期ジョブの状態管理とポーリング
 - **Axios** - HTTPクライアント
 - **React Hook Form** - フォーム管理
 
@@ -23,7 +22,8 @@ Paper Forgeは、PDFファイルの結合、ページ順入替、分割、圧縮
 - **Go 1.22+** - プログラミング言語
 - **Gin** - Webフレームワーク
 - **pdfcpu** - PDF操作ライブラリ
-- **Ghostscript** - PDF圧縮（予定）
+- **Ghostscript** - PDF圧縮ラッパー（`gs` コマンド）
+- **Asynq + Redis** - 非同期ジョブキューと進捗管理
 - **bcrypt** - パスワードハッシュ化
 
 ### 開発ツール
@@ -73,28 +73,14 @@ paper-forge/
 └── README.md          # このファイル
 ```
 
-## 🚀 開発の流れ
+## ✨ 主な機能
 
-このプロジェクトは以下の順序で開発を進めます：
-
-1. **リポジトリ骨格の準備** ✓
-   - ディレクトリ構成の作成
-   - 設定ファイルの配置
-
-2. **フロントエンド開発環境の初期化**（次のステップ）
-   - Viteプロジェクトのセットアップ
-   - 必要なライブラリのインストール
-   - 基本的なルーティングと状態管理の設定
-
-3. **バックエンドAPIサーバーの雛形実装**
-   - Go modulesの初期化
-   - Ginサーバーの基本設定
-   - ヘルスチェックと認証エンドポイントの実装
-
-4. **機能実装**（今後）
-   - ログイン機能
-   - PDF結合機能
-   - その他のPDF操作機能
+- PDF 結合（並び替え付き、即時 or 非同期自動切替）
+- ページ順入替（1-based 入力 → 0-based に変換して送信）
+- 範囲分割（`1-3,7,10-` のような範囲文字列をサポート）
+- 圧縮（Ghostscript プリセット `standard` / `aggressive`）
+- 非同期ジョブ管理（Asynq + Redis / 進捗ポーリング / ダウンロード API）
+- ワークスペース履歴（結果メタデータ・Blob を IndexedDB に保存）
 
 ## ⚙️ セットアップ
 
@@ -138,6 +124,18 @@ npm install -g pnpm
    openssl rand -hex 32
    ```
 
+### 依存サービスの起動
+
+1. **Redis**（ジョブキュー用）
+
+   ```bash
+   docker run --rm -p 6379:6379 redis:7
+   ```
+
+2. **Ghostscript**（PDF圧縮）
+
+   macOS / Linux の場合は `brew install ghostscript` 等でインストールし、`which gs` でパスを確認してください。Windows の場合は公式バイナリをインストールし、環境変数 `GHOSTSCRIPT_PATH` に設定します。
+
 ### フロントエンドのセットアップ
 
 ```bash
@@ -153,10 +151,15 @@ pnpm dev      # 開発サーバー起動
 ```bash
 cd backend
 go mod download   # 依存関係のダウンロード
+
+# 環境変数例（bash）
+export QUEUE_REDIS_URL="redis://127.0.0.1:6379/0"
+export GHOSTSCRIPT_PATH="$(which gs)"
+
 go run ./cmd/api  # サーバー起動
 ```
 
-APIサーバーが http://localhost:8080 で起動
+API サーバーは http://localhost:8080 で起動し、PDF 操作 API と `/api/jobs/*` エンドポイントを提供します。
 
 **ヘルスチェック:**
 ```bash
@@ -208,8 +211,8 @@ go run ./cmd/api
 # ビルド
 go build -o app ./cmd/api
 
-# テスト（予定）
-go test ./...
+# テスト
+GOCACHE=$(pwd)/.gocache go test ./...
 
 # フォーマット
 go fmt ./...
@@ -225,13 +228,15 @@ go fmt ./...
 - [API仕様](docs/04_api_spec.md) - エンドポイント詳細
 - [デプロイガイド](docs/05_deploy_guide.md) - 本番環境構築手順
 
-## 🔒 セキュリティ
+## 🔒 セキュリティ / 運用メモ
 
-- すべての通信はHTTPSを使用（本番環境）
-- bcryptによるパスワードハッシュ化（cost=12）
-- セッション署名Cookie（Secure, HttpOnly, SameSite=Strict）
-- CSRF保護（ダブルサブミット方式）
-- ファイルアップロード時の検証（拡張子・MIME・シグネチャ）
+- すべての通信は HTTPS を使用（本番環境）
+- bcrypt によるパスワードハッシュ化（cost=12）
+- セッション署名 Cookie（Secure, HttpOnly, SameSite=Strict）
+- CSRF トークンは `X-CSRF-Token` ヘッダーで送信
+- ファイルアップロード時の検証（拡張子・MIME・`%PDF-` シグネチャ）
+- 非同期ジョブ結果は `/tmp/app/<jobId>` に 10 分保存後クリーンアップ
+- `JOB_RESULT_BASE_URL` を設定すれば CDN / GCS の署名 URL を返却可能
 
 ## 📄 ライセンス
 
@@ -243,8 +248,9 @@ Apache-2.0
 
 ---
 
-**現在の開発状況**:
-- ✅ リポジトリ骨格の準備完了
-- ✅ フロントエンド開発環境の初期化完了
-- ✅ バックエンドAPIサーバーの雛形実装完了
-- 🚧 次のステップ: ログイン機能とPDF操作機能の実装
+**現在の開発状況**
+
+- ✅ 認証 / CSRF 対応済み
+- ✅ PDF 結合・入替・分割・圧縮 + 非同期ジョブ導線を実装
+- ✅ フロントエンドのジョブポーリング・ワークスペース連携を実装
+- 🚧 次のステップ: 自動テスト整備 / ドキュメント拡充 / デプロイ環境整備

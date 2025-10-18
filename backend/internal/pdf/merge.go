@@ -11,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/gabriel-vasile/mimetype"
@@ -47,33 +47,41 @@ func NewService(cfg *config.Config) *Service {
 	}
 }
 
+func (s *Service) createWorkspace() (workspace, error) {
+	jobID := uuid.NewString()
+	jobDir := filepath.Join(s.tmpRoot, jobID)
+	inDir := filepath.Join(jobDir, "in")
+	outDir := filepath.Join(jobDir, "out")
+
+	if err := os.MkdirAll(inDir, 0o750); err != nil {
+		return workspace{}, fmt.Errorf("入力ディレクトリの作成に失敗しました: %w", err)
+	}
+	if err := os.MkdirAll(outDir, 0o750); err != nil {
+		return workspace{}, fmt.Errorf("出力ディレクトリの作成に失敗しました: %w", err)
+	}
+	return workspace{
+		jobID:  jobID,
+		dir:    jobDir,
+		inDir:  inDir,
+		outDir: outDir,
+	}, nil
+}
+
+func (s *Service) workspaceFor(jobID string) workspace {
+	jobDir := filepath.Join(s.tmpRoot, jobID)
+	return workspace{
+		jobID:  jobID,
+		dir:    jobDir,
+		inDir:  filepath.Join(jobDir, "in"),
+		outDir: filepath.Join(jobDir, "out"),
+	}
+}
+
 // SourceFileMeta は結合対象ファイルのメタ情報です。
 type SourceFileMeta struct {
 	Name  string `json:"name"`
 	Size  int64  `json:"size"`
 	Pages int    `json:"pages"`
-}
-
-// MergeResult は結合処理の結果を保持します。
-type MergeResult struct {
-	JobID          string
-	OutputPath     string
-	OutputFilename string
-	OutputSize     int64
-	TotalPages     int
-	Sources        []SourceFileMeta
-
-	jobDir      string
-	cleanupOnce sync.Once
-	cleanupErr  error
-}
-
-// Cleanup は作業用ディレクトリを削除します。
-func (r *MergeResult) Cleanup() error {
-	r.cleanupOnce.Do(func() {
-		r.cleanupErr = os.RemoveAll(r.jobDir)
-	})
-	return r.cleanupErr
 }
 
 // Error はAPIレスポンス用のエラー情報を保持します。
@@ -117,8 +125,35 @@ type storedFile struct {
 	pages        int
 }
 
+func validateMergeInputs(files []*multipart.FileHeader, order []int) error {
+	if len(files) == 0 {
+		return newError("INVALID_INPUT", "少なくとも1つのPDFファイルを選択してください。", nil)
+	}
+	if len(files) > maxUploadFiles {
+		return newError("LIMIT_EXCEEDED", fmt.Sprintf("アップロードできるPDFは最大%d件までです。", maxUploadFiles), nil)
+	}
+
+	if len(order) > 0 {
+		if len(order) != len(files) {
+			return newError("INVALID_INPUT", "order配列の長さがファイル数と一致していません。", nil)
+		}
+		seen := make(map[int]struct{}, len(order))
+		for _, idx := range order {
+			if idx < 0 || idx >= len(files) {
+				return newError("INVALID_INPUT", "order配列に不正な番号が含まれています。", nil)
+			}
+			if _, ok := seen[idx]; ok {
+				return newError("INVALID_INPUT", "order配列に重複した番号が含まれています。", nil)
+			}
+			seen[idx] = struct{}{}
+		}
+	}
+
+	return nil
+}
+
 // MergeMultipart は multipart/form-data 経由で受け取った PDF を結合します。
-func (s *Service) MergeMultipart(ctx context.Context, files []*multipart.FileHeader, order []int) (_ *MergeResult, err error) {
+func (s *Service) MergeMultipart(ctx context.Context, files []*multipart.FileHeader, order []int) (_ *Result, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -127,46 +162,37 @@ func (s *Service) MergeMultipart(ctx context.Context, files []*multipart.FileHea
 		return nil, err
 	}
 
-	if len(files) == 0 {
-		return nil, newError("INVALID_INPUT", "少なくとも1つのPDFファイルを選択してください。", nil)
-	}
-	if len(files) > maxUploadFiles {
-		return nil, newError("LIMIT_EXCEEDED", fmt.Sprintf("アップロードできるPDFは最大%d件までです。", maxUploadFiles), nil)
+	if err := validateMergeInputs(files, order); err != nil {
+		return nil, err
 	}
 
-	if len(order) > 0 {
-		if len(order) != len(files) {
-			return nil, newError("INVALID_INPUT", "order配列の長さがファイル数と一致していません。", nil)
-		}
-		seen := make(map[int]struct{}, len(order))
-		for _, idx := range order {
-			if idx < 0 || idx >= len(files) {
-				return nil, newError("INVALID_INPUT", "order配列に不正な番号が含まれています。", nil)
-			}
-			if _, ok := seen[idx]; ok {
-				return nil, newError("INVALID_INPUT", "order配列に重複した番号が含まれています。", nil)
-			}
-			seen[idx] = struct{}{}
-		}
+	state, _, err := s.prepareMerge(ctx, files, order)
+	if err != nil {
+		return nil, err
 	}
-
-	jobID := uuid.NewString()
-	jobDir := filepath.Join(s.tmpRoot, jobID)
-	inDir := filepath.Join(jobDir, "in")
-	outDir := filepath.Join(jobDir, "out")
-
-	if err := os.MkdirAll(inDir, 0o750); err != nil {
-		return nil, fmt.Errorf("入力ディレクトリの作成に失敗しました: %w", err)
-	}
-	if err := os.MkdirAll(outDir, 0o750); err != nil {
-		return nil, fmt.Errorf("出力ディレクトリの作成に失敗しました: %w", err)
-	}
-
 	defer func() {
 		if err != nil {
-			_ = os.RemoveAll(jobDir)
+			_ = removeDir(state.ws.dir)
 		}
 	}()
+
+	result, execErr := s.executeMerge(ctx, state, order, nil)
+	if execErr != nil {
+		return nil, execErr
+	}
+	return result, nil
+}
+
+type mergeState struct {
+	ws          workspace
+	storedFiles []storedFile
+}
+
+func (s *Service) prepareMerge(ctx context.Context, files []*multipart.FileHeader, order []int) (*mergeState, *JobManifest, error) {
+	ws, err := s.createWorkspace()
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var (
 		storedFiles []storedFile
@@ -175,20 +201,41 @@ func (s *Service) MergeMultipart(ctx context.Context, files []*multipart.FileHea
 
 	for i, fh := range files {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		sf, storeErr := s.storeMultipartFile(ctx, fh, inDir, i)
+		sf, storeErr := s.storeMultipartFile(ctx, fh, ws.inDir, i)
 		if storeErr != nil {
-			return nil, storeErr
+			_ = removeDir(ws.dir)
+			return nil, nil, storeErr
 		}
 
 		totalUpload += sf.size
 		if totalUpload > MaxUploadTotalBytes {
-			return nil, newError("LIMIT_EXCEEDED", "アップロードされたファイル全体のサイズが上限(300MB)を超えています。", nil)
+			_ = removeDir(ws.dir)
+			return nil, nil, newError("LIMIT_EXCEEDED", "アップロードされたファイル全体のサイズが上限(300MB)を超えています。", nil)
 		}
 
 		storedFiles = append(storedFiles, sf)
 	}
+
+	manifest := &JobManifest{
+		JobID:     ws.jobID,
+		Operation: OperationMerge,
+		Files:     toJobFiles(storedFiles),
+		Order:     append([]int(nil), order...),
+		CreatedAt: s.now().UTC(),
+	}
+	if err := writeManifest(ws.dir, manifest); err != nil {
+		_ = removeDir(ws.dir)
+		return nil, nil, fmt.Errorf("ジョブマニフェストの保存に失敗しました: %w", err)
+	}
+
+	return &mergeState{ws: ws, storedFiles: storedFiles}, manifest, nil
+}
+
+func (s *Service) executeMerge(ctx context.Context, state *mergeState, order []int, progress ProgressReporter) (*Result, error) {
+	ws := state.ws
+	storedFiles := state.storedFiles
 
 	ordered := make([]storedFile, len(storedFiles))
 	if len(order) == 0 {
@@ -208,10 +255,12 @@ func (s *Service) MergeMultipart(ctx context.Context, files []*multipart.FileHea
 		return nil, err
 	}
 
-	outputPath := filepath.Join(outDir, outputFilename)
+	outputPath := filepath.Join(ws.outDir, outputFilename)
+	reportProgress(progress, "process", 40)
 	if err := mergeCreateFileCompat(inputPaths, outputPath); err != nil {
 		return nil, newError("UNSUPPORTED_PDF", "PDFの結合に失敗しました。ファイルが破損していないか確認してください。", err)
 	}
+	reportProgress(progress, "write", 80)
 
 	outInfo, err := os.Stat(outputPath)
 	if err != nil {
@@ -243,7 +292,7 @@ func (s *Service) MergeMultipart(ctx context.Context, files []*multipart.FileHea
 		Size:      outInfo.Size(),
 	}
 
-	metaPath := filepath.Join(jobDir, "meta.json")
+	metaPath := filepath.Join(ws.dir, "meta.json")
 	if err := writeJSON(metaPath, meta); err != nil {
 		return nil, fmt.Errorf("メタデータの保存に失敗しました: %w", err)
 	}
@@ -253,18 +302,42 @@ func (s *Service) MergeMultipart(ctx context.Context, files []*multipart.FileHea
 		expireMinutes = defaultCleanupMin
 	}
 	time.AfterFunc(time.Duration(expireMinutes)*time.Minute, func() {
-		_ = os.RemoveAll(jobDir)
+		_ = removeDir(ws.dir)
 	})
 
-	return &MergeResult{
-		JobID:          jobID,
+	result := &Result{
+		JobID:          ws.jobID,
+		Operation:      OperationMerge,
 		OutputPath:     outputPath,
 		OutputFilename: outputFilename,
 		OutputSize:     outInfo.Size(),
-		TotalPages:     totalPages,
-		Sources:        sources,
-		jobDir:         jobDir,
-	}, nil
+		ResultKind:     ResultKindPDF,
+		Meta: &MergeMeta{
+			TotalPages: totalPages,
+			Sources:    sources,
+		},
+		jobDir: ws.dir,
+	}
+	reportProgress(progress, "completed", 100)
+	return result, nil
+}
+
+// PrepareMergeJob は非同期処理用に入力ファイルを保存し、マニフェストを返します。
+func (s *Service) PrepareMergeJob(ctx context.Context, files []*multipart.FileHeader, order []int) (*JobManifest, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if err := validateMergeInputs(files, order); err != nil {
+		return nil, err
+	}
+	state, manifest, err := s.prepareMerge(ctx, files, order)
+	if err != nil {
+		return nil, err
+	}
+	// stateは将来の実行で使用されるため、ここではクリーンアップしない
+	_ = state
+	return manifest, nil
 }
 
 func (s *Service) storeMultipartFile(ctx context.Context, fh *multipart.FileHeader, dir string, index int) (storedFile, error) {
@@ -374,6 +447,25 @@ func writeJSON(path string, v any) error {
 	enc := json.NewEncoder(file)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// DiscardJob は指定したジョブのワークスペースを削除します。
+func (s *Service) DiscardJob(jobID string) error {
+	if s == nil {
+		return nil
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return nil
+	}
+	ws := s.workspaceFor(jobID)
+	return removeDir(ws.dir)
+}
+
+func removeDir(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	return os.RemoveAll(path)
 }
 
 // IsError は指定したコードのエラーかどうかを判定します。

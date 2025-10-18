@@ -2,7 +2,7 @@
  * PDF結合タブ (SortableJS + Tailwind CSS)
  *
  * - ファイル選択とドラッグ&ドロップによる並べ替え
- * - 疑似進捗バー（load → process → write）
+ * - 同期/非同期処理を自動判定し、非同期時はジョブ進捗をポーリング
  * - 成功時はワークスペースストアへ結果を保存し、ワークスペースページへの導線を表示
  */
 
@@ -11,12 +11,16 @@ import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import Sortable from 'sortablejs';
 
-import { mergePdfs } from '@/api/pdf';
+import { mergePdfs, type MergeMeta, type PdfOperationResult } from '@/api/pdf';
+import { downloadJobResult } from '@/api/jobs';
 import { ApiError } from '@/api/httpClient';
 import { ErrorModal } from '@/components/modals/ErrorModal';
 import { ProcessingModal } from '@/components/modals/ProcessingModal';
 import { SuccessModal } from '@/components/modals/SuccessModal';
+import { useJobPolling } from '@/hooks/useJobPolling';
+import { jobStageToLabel } from '@/utils/jobProgress';
 import { useWorkspaceStore } from '@/stores/workspaceStore';
+import type { WorkspaceResultMeta } from '@/types/workspace';
 
 interface UploadedFile {
   id: string;
@@ -59,9 +63,14 @@ const generateOutputFilename = (files: UploadedFile[]): string => {
     files.length === 1
       ? files[0].file.name.replace(/\.pdf$/i, '')
       : `merged-${files.length}files`;
-  return `${base}-${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(
-    timestamp.getMinutes()
-  )}${pad(timestamp.getSeconds())}.pdf`;
+  return `${base}-${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(
+    timestamp.getHours()
+  )}${pad(timestamp.getMinutes())}${pad(timestamp.getSeconds())}.pdf`;
+};
+
+const isMergeMeta = (meta: unknown): meta is MergeMeta => {
+  if (!meta || typeof meta !== 'object') return false;
+  return 'sources' in meta && Array.isArray((meta as MergeMeta).sources);
 };
 
 export const MergeTab = () => {
@@ -72,14 +81,21 @@ export const MergeTab = () => {
   const [showSuccess, setShowSuccess] = useState(false);
   const [progress, setProgress] = useState<number>(0);
   const [progressStep, setProgressStep] = useState<ProgressStep>('idle');
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobStage, setJobStage] = useState<string | undefined>(undefined);
+  const [isJobModalOpen, setIsJobModalOpen] = useState(false);
+  const [isPollingJob, setIsPollingJob] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sortableRef = useRef<Sortable | null>(null);
   const lastSubmittedFilesRef = useRef<UploadedFile[]>([]);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const jobHandledRef = useRef(false);
 
   const navigate = useNavigate();
   const saveWorkspaceResult = useWorkspaceStore((state) => state.saveResult);
+
+  const jobQuery = useJobPolling({ jobId, enabled: isPollingJob });
 
   const validateFile = (file: File): string | null => {
     if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -169,51 +185,78 @@ export const MergeTab = () => {
     };
   }, [files.length]);
 
+  const resetState = () => {
+    setResultBlob(null);
+    setResultFilename('merged.pdf');
+    setShowSuccess(false);
+    setProgress(0);
+    setProgressStep('idle');
+    setJobStage(undefined);
+    setJobId(null);
+    setIsPollingJob(false);
+    jobHandledRef.current = false;
+  };
+
   const mergeMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<PdfOperationResult> => {
       const validFiles = files.filter((file) => !file.error);
       if (validFiles.length === 0) {
         throw new Error('有効なPDFファイルが選択されていません。');
       }
       lastSubmittedFilesRef.current = validFiles;
-      const blob = await mergePdfs({
+      return mergePdfs({
         files: validFiles.map((item) => item.file),
       });
-      return blob;
     },
     onMutate: () => {
+      resetState();
       setErrorMessage(null);
+      setIsJobModalOpen(true);
       setProgress(5);
       setProgressStep('load');
     },
-    onSuccess: async (blob) => {
-      setProgress(100);
-      setProgressStep('complete');
-
-      const submittedFiles = lastSubmittedFilesRef.current;
-      const outputFilename = generateOutputFilename(submittedFiles);
-      try {
-        await saveWorkspaceResult({
-          blob,
-          filename: outputFilename,
-          type: 'pdf',
-          source: 'merge',
-          meta: {
-            inputFilenames: submittedFiles.map((item) => item.file.name),
-          },
-        });
-      } catch (storageError) {
-        console.error('ワークスペースへの保存に失敗しました:', storageError);
+    onSuccess: async (result) => {
+      if (result.type === 'inline') {
+        setProgress(95);
+        setProgressStep('write');
+        try {
+          const submittedFiles = lastSubmittedFilesRef.current;
+          const outputFilename = result.filename || generateOutputFilename(submittedFiles);
+          await saveWorkspaceResult({
+            blob: result.blob,
+            filename: outputFilename,
+            type: 'pdf',
+            source: 'merge',
+            meta: {
+              inputFilenames: submittedFiles.map((item) => item.file.name),
+            },
+          });
+          setResultBlob(result.blob);
+          setResultFilename(outputFilename);
+          setProgress(100);
+          setProgressStep('complete');
+          setShowSuccess(true);
+        } catch (storageError) {
+          console.error('ワークスペースへの保存に失敗しました:', storageError);
+          setErrorMessage('結果の保存に失敗しました。もう一度お試しください。');
+        } finally {
+          setIsJobModalOpen(false);
+        }
+        return;
       }
 
-      setResultBlob(blob);
-      setResultFilename(outputFilename);
-      setShowSuccess(true);
+      // 非同期ジョブへ切り替え
+      jobHandledRef.current = false;
+      setJobId(result.jobId);
+      setIsPollingJob(true);
+      setJobStage('queued');
+      setProgress(10);
+      setProgressStep('load');
     },
     onError: (error: unknown) => {
       setProgress(0);
       setProgressStep('idle');
-
+      setIsJobModalOpen(false);
       if (error instanceof ApiError) {
         setErrorMessage(getFriendlyApiMessage(error));
         return;
@@ -227,20 +270,16 @@ export const MergeTab = () => {
   });
 
   useEffect(() => {
-    if (mergeMutation.isPending) {
-      setProgress(5);
-      setProgressStep('load');
-
+    if (isJobModalOpen && mergeMutation.isPending && !isPollingJob) {
       const stepTargets: { step: ProgressStep; target: number }[] = [
         { step: 'load', target: 20 },
-        { step: 'process', target: 70 },
-        { step: 'write', target: 90 },
+        { step: 'process', target: 45 },
       ];
       let currentIndex = 0;
 
       progressIntervalRef.current = setInterval(() => {
         setProgress((prev) => {
-          const currentTarget = stepTargets[currentIndex]?.target ?? 95;
+          const currentTarget = stepTargets[currentIndex]?.target ?? 50;
           if (prev < currentTarget) {
             return Math.min(prev + 3, currentTarget);
           }
@@ -256,8 +295,6 @@ export const MergeTab = () => {
         clearInterval(progressIntervalRef.current);
         progressIntervalRef.current = null;
       }
-      setProgressStep((prev) => (prev === 'complete' ? prev : 'idle'));
-      setProgress((prev) => (prev === 100 ? prev : 0));
     }
 
     return () => {
@@ -266,15 +303,100 @@ export const MergeTab = () => {
         progressIntervalRef.current = null;
       }
     };
-  }, [mergeMutation.isPending]);
+  }, [isJobModalOpen, mergeMutation.isPending, isPollingJob]);
+
+  useEffect(() => {
+    if (!jobQuery.data || jobHandledRef.current) {
+      return;
+    }
+    const info = jobQuery.data;
+    if (info.progress.percent !== undefined) {
+      setProgress((prev) => Math.max(prev, info.progress.percent));
+    }
+    if (info.progress.stage) {
+      setJobStage(info.progress.stage);
+    }
+    if (info.status === 'running') {
+      setProgressStep('process');
+    }
+
+    if (info.status === 'done') {
+      jobHandledRef.current = true;
+      const finalize = async () => {
+        try {
+          setProgressStep('write');
+          const { blob, filename } = await downloadJobResult(info.jobId);
+          const submittedFiles = lastSubmittedFilesRef.current;
+          let workspaceMeta: WorkspaceResultMeta | undefined;
+          if (isMergeMeta(info.meta)) {
+            workspaceMeta = {
+              inputFilenames: info.meta.sources.map((source) => source.name),
+              pageCount: info.meta.totalPages,
+            };
+          } else {
+            workspaceMeta = {
+              inputFilenames: submittedFiles.map((item) => item.file.name),
+            };
+          }
+
+          await saveWorkspaceResult({
+            blob,
+            filename,
+            type: 'pdf',
+            source: 'merge',
+            meta: workspaceMeta,
+          });
+
+          setResultBlob(blob);
+          setResultFilename(filename);
+          setProgress(100);
+          setProgressStep('complete');
+          setShowSuccess(true);
+        } catch (downloadError) {
+          console.error(downloadError);
+          if (downloadError instanceof ApiError) {
+            setErrorMessage(getFriendlyApiMessage(downloadError));
+          } else if (downloadError instanceof Error) {
+            setErrorMessage(downloadError.message);
+          } else {
+            setErrorMessage('ジョブ結果の取得中にエラーが発生しました。');
+          }
+        } finally {
+          setIsPollingJob(false);
+          setIsJobModalOpen(false);
+          setJobId(null);
+          setJobStage(undefined);
+        }
+      };
+      finalize();
+    } else if (info.status === 'error') {
+      jobHandledRef.current = true;
+      setIsPollingJob(false);
+      setIsJobModalOpen(false);
+      setJobId(null);
+      setJobStage(undefined);
+      if (info.error) {
+        setErrorMessage(info.error.message);
+      } else {
+        setErrorMessage('ジョブが失敗しました。詳細を確認して再度お試しください。');
+      }
+    }
+  }, [jobQuery.data, saveWorkspaceResult]);
+
+  useEffect(() => {
+    if (!jobQuery.error) return;
+    jobHandledRef.current = true;
+    setIsPollingJob(false);
+    setIsJobModalOpen(false);
+    setJobId(null);
+    setJobStage(undefined);
+    setErrorMessage(jobQuery.error.message);
+  }, [jobQuery.error]);
 
   const handleReset = () => {
+    resetState();
     setFiles([]);
-    setResultBlob(null);
-    setShowSuccess(false);
     setErrorMessage(null);
-    setProgress(0);
-    setProgressStep('idle');
   };
 
   const validFiles = useMemo(() => files.filter((file) => !file.error), [files]);
@@ -283,11 +405,11 @@ export const MergeTab = () => {
   const canExecute = validFiles.length >= 2 && !hasErrors && totalSize <= MAX_TOTAL_SIZE;
 
   const executeMerge = () => {
-    if (!canExecute || mergeMutation.isPending) return;
+    if (!canExecute || mergeMutation.isPending || isPollingJob) return;
     mergeMutation.mutate();
   };
 
-  const progressLabel = PROGRESS_LABELS[progressStep];
+  const progressLabel = jobStageToLabel(jobStage) ?? PROGRESS_LABELS[progressStep];
 
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -331,10 +453,8 @@ export const MergeTab = () => {
         />
       </div>
 
-      {errorMessage && (
-        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
-          {errorMessage}
-        </div>
+      {errorMessage && !isJobModalOpen && (
+        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">{errorMessage}</div>
       )}
 
       {files.length > 0 && (
@@ -371,7 +491,11 @@ export const MergeTab = () => {
                       {uploadedFile.error && <p className="text-xs text-red-600 mt-1">{uploadedFile.error}</p>}
                     </div>
                   </div>
-                  <button onClick={() => removeFile(uploadedFile.id)} className="ml-4 text-red-500 hover:text-red-700" aria-label="ファイルを削除">
+                  <button
+                    onClick={() => removeFile(uploadedFile.id)}
+                    className="ml-4 text-red-500 hover:text-red-700"
+                    aria-label="ファイルを削除"
+                  >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                     </svg>
@@ -384,10 +508,10 @@ export const MergeTab = () => {
           <div className="space-y-3">
             <button
               onClick={executeMerge}
-              disabled={!canExecute || mergeMutation.isPending}
+              disabled={!canExecute || mergeMutation.isPending || isPollingJob}
               className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {mergeMutation.isPending ? 'PDF結合中...' : 'PDFを結合する'}
+              {mergeMutation.isPending || isPollingJob ? 'PDF結合中...' : 'PDFを結合する'}
             </button>
             {!canExecute && (
               <p className="text-center text-sm text-red-600">
@@ -403,7 +527,7 @@ export const MergeTab = () => {
       )}
 
       <ProcessingModal
-        isOpen={mergeMutation.isPending}
+        isOpen={isJobModalOpen}
         title="PDF結合中..."
         message="結合処理には数秒かかる場合があります。画面を閉じずにお待ちください。"
         progress={progress}
@@ -424,11 +548,7 @@ export const MergeTab = () => {
         />
       )}
 
-      <ErrorModal
-        isOpen={!!errorMessage && !mergeMutation.isPending}
-        message={errorMessage ?? ''}
-        onClose={() => setErrorMessage(null)}
-      />
+      <ErrorModal isOpen={!!errorMessage && !isJobModalOpen} message={errorMessage ?? ''} onClose={() => setErrorMessage(null)} />
     </div>
   );
 };

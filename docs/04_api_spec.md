@@ -95,7 +95,7 @@ interface JobInfo {
 
 * Res
 
-    * 同期: `200 application/pdf`（バイナリ）
+    * 同期: `200 application/pdf`（バイナリ）。ヘッダー `Content-Disposition`, `X-Job-Id`
     * 非同期: `202 Accepted` `{ "jobId": "..." }`
 * 4xx: `400 INVALID_INPUT`, `413 LIMIT_EXCEEDED`, `400 UNSUPPORTED_PDF`
 
@@ -114,7 +114,7 @@ interface JobInfo {
 
 > UI 表示は1ページ目を1として扱うが、API は常に 0-based index を受け付ける。フロントエンドで送信前に変換する。
 
-* Res: 同 / 非同期はファイルサイズ・処理時間で切替
+* Res: 同 / 非同期はファイルサイズ・処理時間で切替（同期時は `Content-Disposition`, `X-Job-Id` ヘッダーを返却）
 
 ### 4.3 POST /pdf/split
 
@@ -126,7 +126,7 @@ interface JobInfo {
 { "input": "gs://bucket/in.pdf", "ranges": "1-3,7,10-" }
 ```
 
-* Res: 同期 `200 application/zip` / 非同期 `202 { jobId }`
+* Res: 同期 `200 application/zip`（`Content-Disposition`, `X-Job-Id`） / 非同期 `202 { jobId }`
 
 ### 4.4 POST /pdf/optimize
 
@@ -138,7 +138,7 @@ interface JobInfo {
 ```
 
 * `preset`: `standard`（10–20%減）, `aggressive`（30–50%減）
-* Res: 同期 `200 application/pdf` / 非同期 `202 { jobId }`
+* Res: 同期 `200 application/pdf`（`Content-Disposition`, `X-Job-Id`） / 非同期 `202 { jobId }`
 
 ---
 
@@ -155,16 +155,43 @@ interface JobInfo {
 * Res
 
 ```json
-{ "jobId": "...", "status": "running", "progress": 35, "downloadUrl": null }
+{
+  "jobId": "JOB-123",
+  "operation": "merge",
+  "status": "running",
+  "progress": {
+    "percent": 42,
+    "stage": "process",
+    "message": "pdfcpu merging"
+  },
+  "downloadUrl": null,
+  "meta": {
+    "totalPages": 120,
+    "sources": [
+      { "name": "doc-a.pdf", "size": 1048576, "pages": 60 },
+      { "name": "doc-b.pdf", "size": 524288, "pages": 60 }
+    ]
+  },
+  "updatedAt": "2025-10-18T02:34:56Z"
+}
 ```
 
 * `status`: `queued|running|done|error`
-* `downloadUrl`: `done` のみ（署名URL）。有効期限は短時間。
+* `progress`: 0–100%。`stage` は `queued|load|process|write|completed`
+* `downloadUrl`: 成功時は `/api/jobs/{id}/download` または署名付きURL
+* `meta`: 処理種別ごとのメタデータ（`MergeMeta`, `SplitMeta`, など）。失敗時は省略
 
 ### 5.3 進捗の定義
 
-* 内部ステップ: `load(0-20)` / `process(20-80)` / `write(80-100)`
+* 内部ステップ: `queued` → `load(0-20)` → `process(20-80)` → `write(80-100)` → `completed`
 * `process` はページ数や入力数で加重。**単調増加**を保証。
+* `message` はバックエンド側のステータス文字列（デバッグ用途）。未設定の場合もある。
+
+### 5.4 GET /jobs/{jobId}/download
+
+* 用途: 成功したジョブの成果物をダウンロード
+* Res: `200 OK` + バイナリ（PDF/ZIP）。ヘッダー `Content-Disposition`, `Cache-Control: no-store`
+* エラー: `404 JOB_RESULT_NOT_FOUND`（TTL切れなど）、`400 INVALID_INPUT`
 
 ---
 
