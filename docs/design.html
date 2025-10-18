@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="ja" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Tools - 高機能PDFエディター</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <style>
+        body {
+            box-sizing: border-box;
+        }
+        .drag-over {
+            border-color: #3b82f6 !important;
+            background-color: #eff6ff !important;
+        }
+        .file-item {
+            transition: all 0.2s ease;
+        }
+        .file-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        }
+        .sortable-ghost {
+            opacity: 0.4;
+        }
+        .sortable-chosen {
+            transform: rotate(5deg);
+        }
+    </style>
+</head>
+<body class="h-full bg-gradient-to-br from-blue-50 to-indigo-100 font-sans">
+<!-- ログイン画面 -->
+<div id="loginScreen" class="min-h-full flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+    <div class="max-w-md w-full space-y-8">
+        <div class="text-center">
+            <div class="mx-auto h-16 w-16 bg-blue-600 rounded-full flex items-center justify-center mb-4">
+                <svg class="h-8 w-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                </svg>
+            </div>
+            <h2 class="text-3xl font-bold text-gray-900">PDF Tools</h2>
+            <p class="mt-2 text-sm text-gray-600">高機能PDFエディターにログイン</p>
+        </div>
+        <form id="loginForm" class="mt-8 space-y-6">
+            <div class="space-y-4">
+                <div>
+                    <label for="username" class="block text-sm font-medium text-gray-700">ユーザー名</label>
+                    <input id="username" name="username" type="text" required
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700">パスワード</label>
+                    <input id="password" name="password" type="password" required
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+            </div>
+            <div id="loginError" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded"></div>
+            <button type="submit" id="loginBtn"
+                    class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50">
+                <span id="loginBtnText">ログイン</span>
+                <div id="loginSpinner" class="hidden ml-2 w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- メインアプリケーション -->
+<div id="mainApp" class="hidden min-h-full">
+    <!-- ヘッダー -->
+    <header class="bg-white shadow-sm border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center py-4">
+                <div class="flex items-center">
+                    <div class="h-8 w-8 bg-blue-600 rounded-lg flex items-center justify-center mr-3">
+                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                    </div>
+                    <h1 class="text-xl font-semibold text-gray-900">PDF Tools</h1>
+                </div>
+                <button id="logoutBtn" class="text-gray-500 hover:text-gray-700 px-3 py-2 rounded-md text-sm font-medium">
+                    ログアウト
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- 機能選択タブ -->
+        <div class="mb-8">
+            <nav class="flex space-x-8" aria-label="Tabs">
+                <button class="tab-btn active" data-tab="merge">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4"></path>
+                    </svg>
+                    結合
+                </button>
+                <button class="tab-btn" data-tab="reorder">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"></path>
+                    </svg>
+                    ページ順入替
+                </button>
+                <button class="tab-btn" data-tab="split">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                    </svg>
+                    分割
+                </button>
+                <button class="tab-btn" data-tab="optimize">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                    圧縮
+                </button>
+            </nav>
+        </div>
+
+        <!-- 結合タブ -->
+        <div id="mergeTab" class="tab-content">
+            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                <h2 class="text-lg font-medium text-gray-900 mb-4">PDF結合</h2>
+                <p class="text-sm text-gray-600 mb-6">複数のPDFファイルを1つに結合します。ドラッグ&ドロップで順序を変更できます。</p>
+
+                <div id="mergeDropZone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors cursor-pointer">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                        <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3-3m-3 3l3 3m-3-3H21m12 0v-8a4 4 0 00-4-4h-5m0 0V8a4 4 0 014-4h4m-4 4v4m-4 0h4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <p class="mt-2 text-sm text-gray-600">
+                        <span class="font-medium">クリックしてファイルを選択</span> または ドラッグ&ドロップ
+                    </p>
+                    <p class="text-xs text-gray-500 mt-1">PDF形式のみ（最大20ファイル、各100MB以下）</p>
+                    <input type="file" id="mergeFileInput" multiple accept=".pdf" class="hidden">
+                </div>
+
+                <div id="mergeFileList" class="mt-6 space-y-3 hidden">
+                    <h3 class="text-sm font-medium text-gray-900">選択されたファイル（ドラッグで順序変更）</h3>
+                    <div id="mergeFiles" class="space-y-2"></div>
+                    <button id="mergeExecuteBtn" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50">
+                        PDFを結合する
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ページ順入替タブ -->
+        <div id="reorderTab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                <h2 class="text-lg font-medium text-gray-900 mb-4">ページ順入替</h2>
+                <p class="text-sm text-gray-600 mb-6">PDFのページ順序をドラッグ&ドロップで変更します。</p>
+
+                <div id="reorderDropZone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors cursor-pointer">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                        <path d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <p class="mt-2 text-sm text-gray-600">
+                        <span class="font-medium">PDFファイルを選択</span>
+                    </p>
+                    <p class="text-xs text-gray-500 mt-1">PDF形式のみ（最大100MB、2000ページ以下）</p>
+                    <input type="file" id="reorderFileInput" accept=".pdf" class="hidden">
+                </div>
+
+                <div id="reorderPreview" class="mt-6 hidden">
+                    <h3 class="text-sm font-medium text-gray-900 mb-3">ページプレビュー（ドラッグで順序変更）</h3>
+                    <div id="reorderPages" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6"></div>
+                    <button id="reorderExecuteBtn" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50">
+                        ページ順序を適用
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 分割タブ -->
+        <div id="splitTab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                <h2 class="text-lg font-medium text-gray-900 mb-4">PDF分割</h2>
+                <p class="text-sm text-gray-600 mb-6">PDFを指定したページ範囲で分割します。</p>
+
+                <div id="splitDropZone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors cursor-pointer">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                        <path d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <p class="mt-2 text-sm text-gray-600">
+                        <span class="font-medium">PDFファイルを選択</span>
+                    </p>
+                    <p class="text-xs text-gray-500 mt-1">PDF形式のみ（最大100MB、2000ページ以下）</p>
+                    <input type="file" id="splitFileInput" accept=".pdf" class="hidden">
+                </div>
+
+                <div id="splitOptions" class="mt-6 hidden">
+                    <div class="mb-4">
+                        <label for="splitRanges" class="block text-sm font-medium text-gray-700 mb-2">分割範囲</label>
+                        <input type="text" id="splitRanges" placeholder="例: 1-3,7,10-"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                        <p class="text-xs text-gray-500 mt-1">形式: 1-3,7,10- （カンマ区切り、ハイフンで範囲指定）</p>
+                    </div>
+                    <button id="splitExecuteBtn" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50">
+                        PDFを分割
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 圧縮タブ -->
+        <div id="optimizeTab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                <h2 class="text-lg font-medium text-gray-900 mb-4">PDF圧縮</h2>
+                <p class="text-sm text-gray-600 mb-6">PDFファイルを最適化してサイズを削減します。</p>
+
+                <div id="optimizeDropZone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors cursor-pointer">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                        <path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <p class="mt-2 text-sm text-gray-600">
+                        <span class="font-medium">PDFファイルを選択</span>
+                    </p>
+                    <p class="text-xs text-gray-500 mt-1">PDF形式のみ（最大100MB、2000ページ以下）</p>
+                    <input type="file" id="optimizeFileInput" accept=".pdf" class="hidden">
+                </div>
+
+                <div id="optimizeOptions" class="mt-6 hidden">
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">圧縮レベル</label>
+                        <div class="space-y-2">
+                            <label class="flex items-center">
+                                <input type="radio" name="optimizePreset" value="standard" checked class="mr-2">
+                                <span class="text-sm">標準（推奨）</span>
+                            </label>
+                            <label class="flex items-center">
+                                <input type="radio" name="optimizePreset" value="aggressive" class="mr-2">
+                                <span class="text-sm">高圧縮（画質が低下する場合があります）</span>
+                            </label>
+                        </div>
+                    </div>
+                    <button id="optimizeExecuteBtn" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50">
+                        PDFを圧縮
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 処理中モーダル -->
+        <div id="processingModal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+            <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                <div class="mt-3 text-center">
+                    <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 mb-4">
+                        <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                    </div>
+                    <h3 class="text-lg leading-6 font-medium text-gray-900" id="processingTitle">処理中...</h3>
+                    <div class="mt-2 px-7 py-3">
+                        <p class="text-sm text-gray-500" id="processingMessage">PDFを処理しています。しばらくお待ちください。</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- エラーモーダル -->
+        <div id="errorModal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+            <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                <div class="mt-3 text-center">
+                    <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 mb-4">
+                        <svg class="h-6 w-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">エラーが発生しました</h3>
+                    <div class="mt-2 px-7 py-3">
+                        <p class="text-sm text-gray-500" id="errorMessage">処理中にエラーが発生しました。</p>
+                    </div>
+                    <div class="items-center px-4 py-3">
+                        <button id="errorCloseBtn" class="px-4 py-2 bg-red-500 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-300">
+                            閉じる
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // グローバル変数
+    let currentFiles = [];
+    let currentPdfDoc = null;
+    let csrfToken = '';
+
+    // 初期化
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeApp();
+    });
+
+    function initializeApp() {
+        setupEventListeners();
+        setupTabNavigation();
+        setupDragAndDrop();
+        checkAuthStatus();
+    }
+
+    // 認証状態チェック
+    function checkAuthStatus() {
+        // 実際の実装では、サーバーに認証状態を確認するAPIを呼び出す
+        // ここではデモ用に常にログイン画面を表示
+        showLoginScreen();
+    }
+
+    function showLoginScreen() {
+        document.getElementById('loginScreen').classList.remove('hidden');
+        document.getElementById('mainApp').classList.add('hidden');
+    }
+
+    function showMainApp() {
+        document.getElementById('loginScreen').classList.add('hidden');
+        document.getElementById('mainApp').classList.remove('hidden');
+    }
+
+    // イベントリスナー設定
+    function setupEventListeners() {
+        // ログイン
+        document.getElementById('loginForm').addEventListener('submit', handleLogin);
+        document.getElementById('logoutBtn').addEventListener('click', handleLogout);
+
+        // ファイル選択
+        document.getElementById('mergeDropZone').addEventListener('click', () => document.getElementById('mergeFileInput').click());
+        document.getElementById('reorderDropZone').addEventListener('click', () => document.getElementById('reorderFileInput').click());
+        document.getElementById('splitDropZone').addEventListener('click', () => document.getElementById('splitFileInput').click());
+        document.getElementById('optimizeDropZone').addEventListener('click', () => document.getElementById('optimizeFileInput').click());
+
+        // ファイル入力
+        document.getElementById('mergeFileInput').addEventListener('change', handleMergeFiles);
+        document.getElementById('reorderFileInput').addEventListener('change', handleReorderFile);
+        document.getElementById('splitFileInput').addEventListener('change', handleSplitFile);
+        document.getElementById('optimizeFileInput').addEventListener('change', handleOptimizeFile);
+
+        // 実行ボタン
+        document.getElementById('mergeExecuteBtn').addEventListener('click', executeMerge);
+        document.getElementById('reorderExecuteBtn').addEventListener('click', executeReorder);
+        document.getElementById('splitExecuteBtn').addEventListener('click', executeSplit);
+        document.getElementById('optimizeExecuteBtn').addEventListener('click', executeOptimize);
+
+        // モーダル
+        document.getElementById('errorCloseBtn').addEventListener('click', closeErrorModal);
+    }
+
+    // タブナビゲーション
+    function setupTabNavigation() {
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const tabId = this.dataset.tab;
+                switchTab(tabId);
+            });
+        });
+    }
+
+    function switchTab(tabId) {
+        // タブボタンの状態更新
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.classList.remove('active');
+            btn.classList.add('text-gray-500', 'hover:text-gray-700');
+            btn.classList.remove('text-blue-600', 'border-blue-600');
+        });
+
+        const activeBtn = document.querySelector(`[data-tab="${tabId}"]`);
+        activeBtn.classList.add('active');
+        activeBtn.classList.remove('text-gray-500', 'hover:text-gray-700');
+        activeBtn.classList.add('text-blue-600', 'border-b-2', 'border-blue-600');
+
+        // タブコンテンツの表示切替
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.add('hidden');
+        });
+        document.getElementById(`${tabId}Tab`).classList.remove('hidden');
+
+        // ファイル状態をリセット
+        resetFileState();
+    }
+
+    // ドラッグ&ドロップ設定
+    function setupDragAndDrop() {
+        const dropZones = ['mergeDropZone', 'reorderDropZone', 'splitDropZone', 'optimizeDropZone'];
+
+        dropZones.forEach(zoneId => {
+            const zone = document.getElementById(zoneId);
+
+            zone.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                this.classList.add('drag-over');
+            });
+
+            zone.addEventListener('dragleave', function(e) {
+                e.preventDefault();
+                this.classList.remove('drag-over');
+            });
+
+            zone.addEventListener('drop', function(e) {
+                e.preventDefault();
+                this.classList.remove('drag-over');
+
+                const files = Array.from(e.dataTransfer.files).filter(file => file.type === 'application/pdf');
+                if (files.length > 0) {
+                    handleDroppedFiles(zoneId, files);
+                }
+            });
+        });
+    }
+
+    function handleDroppedFiles(zoneId, files) {
+        switch(zoneId) {
+            case 'mergeDropZone':
+                handleMergeFiles({ target: { files } });
+                break;
+            case 'reorderDropZone':
+                if (files.length === 1) {
+                    handleReorderFile({ target: { files } });
+                }
+                break;
+            case 'splitDropZone':
+                if (files.length === 1) {
+                    handleSplitFile({ target: { files } });
+                }
+                break;
+            case 'optimizeDropZone':
+                if (files.length === 1) {
+                    handleOptimizeFile({ target: { files } });
+                }
+                break;
+        }
+    }
+
+    // ログイン処理
+    async function handleLogin(e) {
+        e.preventDefault();
+
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const loginBtn = document.getElementById('loginBtn');
+        const loginBtnText = document.getElementById('loginBtnText');
+        const loginSpinner = document.getElementById('loginSpinner');
+        const loginError = document.getElementById('loginError');
+
+        // UI更新
+        loginBtn.disabled = true;
+        loginBtnText.textContent = 'ログイン中...';
+        loginSpinner.classList.remove('hidden');
+        loginError.classList.add('hidden');
+
+        try {
+            // デモ用の認証（実際の実装では/api/auth/loginにPOST）
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            if (username === 'admin' && password === 'password') {
+                // 成功
+                csrfToken = 'demo-csrf-token';
+                showMainApp();
+            } else {
+                throw new Error('ユーザー名またはパスワードが正しくありません');
+            }
+        } catch (error) {
+            loginError.textContent = error.message;
+            loginError.classList.remove('hidden');
+        } finally {
+            loginBtn.disabled = false;
+            loginBtnText.textContent = 'ログイン';
+            loginSpinner.classList.add('hidden');
+        }
+    }
+
+    function handleLogout() {
+        // 実際の実装では/api/auth/logoutにPOST
+        csrfToken = '';
+        showLoginScreen();
+        resetFileState();
+    }
+
+    // ファイル状態リセット
+    function resetFileState() {
+        currentFiles = [];
+        currentPdfDoc = null;
+
+        // UI要素をリセット
+        document.getElementById('mergeFileList').classList.add('hidden');
+        document.getElementById('reorderPreview').classList.add('hidden');
+        document.getElementById('splitOptions').classList.add('hidden');
+        document.getElementById('optimizeOptions').classList.add('hidden');
+
+        // ファイル入力をクリア
+        document.getElementById('mergeFileInput').value = '';
+        document.getElementById('reorderFileInput').value = '';
+        document.getElementById('splitFileInput').value = '';
+        document.getElementById('optimizeFileInput').value = '';
+    }
+
+    // 結合ファイル処理
+    function handleMergeFiles(e) {
+        const files = Array.from(e.target.files).filter(file => file.type === 'application/pdf');
+
+        if (files.length === 0) {
+            showError('PDFファイルを選択してください');
+            return;
+        }
+
+        if (files.length > 20) {
+            showError('ファイル数は20個以下にしてください');
+            return;
+        }
+
+        currentFiles = files;
+        displayMergeFiles();
+    }
+
+    function displayMergeFiles() {
+        const container = document.getElementById('mergeFiles');
+        container.innerHTML = '';
+
+        currentFiles.forEach((file, index) => {
+            const fileItem = document.createElement('div');
+            fileItem.className = 'file-item bg-gray-50 border border-gray-200 rounded-lg p-4 flex items-center justify-between cursor-move';
+            fileItem.dataset.index = index;
+
+            fileItem.innerHTML = `
+                    <div class="flex items-center">
+                        <svg class="w-5 h-5 text-red-500 mr-3" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/>
+                        </svg>
+                        <div>
+                            <p class="text-sm font-medium text-gray-900">${file.name}</p>
+                            <p class="text-xs text-gray-500">${formatFileSize(file.size)}</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center">
+                        <svg class="w-5 h-5 text-gray-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                        </svg>
+                        <button class="text-red-500 hover:text-red-700" onclick="removeMergeFile(${index})">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                `;
+
+            container.appendChild(fileItem);
+        });
+
+        // Sortable.jsでドラッグ&ドロップを有効化
+        new Sortable(container, {
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            chosenClass: 'sortable-chosen',
+            onEnd: function(evt) {
+                const newFiles = [];
+                container.querySelectorAll('.file-item').forEach(item => {
+                    const index = parseInt(item.dataset.index);
+                    newFiles.push(currentFiles[index]);
+                });
+                currentFiles = newFiles;
+                displayMergeFiles();
+            }
+        });
+
+        document.getElementById('mergeFileList').classList.remove('hidden');
+    }
+
+    function removeMergeFile(index) {
+        currentFiles.splice(index, 1);
+        if (currentFiles.length === 0) {
+            document.getElementById('mergeFileList').classList.add('hidden');
+        } else {
+            displayMergeFiles();
+        }
+    }
+
+    // ページ順入替ファイル処理
+    async function handleReorderFile(e) {
+        const file = e.target.files[0];
+        if (!file || file.type !== 'application/pdf') {
+            showError('PDFファイルを選択してください');
+            return;
+        }
+
+        if (file.size > 100 * 1024 * 1024) {
+            showError('ファイルサイズは100MB以下にしてください');
+            return;
+        }
+
+        try {
+            showProcessing('PDFを読み込み中...', 'ページプレビューを生成しています');
+
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            currentPdfDoc = pdf;
+
+            if (pdf.numPages > 2000) {
+                showError('ページ数は2000ページ以下にしてください');
+                return;
+            }
+
+            await displayPagePreviews(pdf);
+            document.getElementById('reorderPreview').classList.remove('hidden');
+
+        } catch (error) {
+            showError('PDFの読み込みに失敗しました: ' + error.message);
+        } finally {
+            hideProcessing();
+        }
+    }
+
+    async function displayPagePreviews(pdf) {
+        const container = document.getElementById('reorderPages');
+        container.innerHTML = '';
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 0.3 });
+
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            await page.render({ canvasContext: context, viewport: viewport }).promise;
+
+            const pageItem = document.createElement('div');
+            pageItem.className = 'page-item bg-white border-2 border-gray-200 rounded-lg p-2 cursor-move hover:border-blue-400 transition-colors';
+            pageItem.dataset.pageNum = i;
+
+            pageItem.innerHTML = `
+                    <div class="text-center">
+                        <div class="mb-2">${canvas.outerHTML}</div>
+                        <p class="text-xs text-gray-600">ページ ${i}</p>
+                    </div>
+                `;
+
+            container.appendChild(pageItem);
+        }
+
+        // Sortable.jsでページ順序変更を有効化
+        new Sortable(container, {
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            chosenClass: 'sortable-chosen'
+        });
+    }
+
+    // 分割ファイル処理
+    function handleSplitFile(e) {
+        const file = e.target.files[0];
+        if (!file || file.type !== 'application/pdf') {
+            showError('PDFファイルを選択してください');
+            return;
+        }
+
+        if (file.size > 100 * 1024 * 1024) {
+            showError('ファイルサイズは100MB以下にしてください');
+            return;
+        }
+
+        currentFiles = [file];
+        document.getElementById('splitOptions').classList.remove('hidden');
+    }
+
+    // 圧縮ファイル処理
+    function handleOptimizeFile(e) {
+        const file = e.target.files[0];
+        if (!file || file.type !== 'application/pdf') {
+            showError('PDFファイルを選択してください');
+            return;
+        }
+
+        if (file.size > 100 * 1024 * 1024) {
+            showError('ファイルサイズは100MB以下にしてください');
+            return;
+        }
+
+        currentFiles = [file];
+        document.getElementById('optimizeOptions').classList.remove('hidden');
+    }
+
+    // 実行処理
+    async function executeMerge() {
+        if (currentFiles.length === 0) {
+            showError('結合するファイルを選択してください');
+            return;
+        }
+
+        try {
+            showProcessing('PDF結合中...', 'ファイルを結合しています');
+
+            const formData = new FormData();
+            currentFiles.forEach(file => {
+                formData.append('files[]', file);
+            });
+
+            // デモ用の処理（実際は/api/pdf/mergeにPOST）
+            await simulateProcessing();
+            downloadDemoFile('merged.pdf');
+
+        } catch (error) {
+            showError('結合処理に失敗しました: ' + error.message);
+        } finally {
+            hideProcessing();
+        }
+    }
+
+    async function executeReorder() {
+        if (!currentPdfDoc) {
+            showError('PDFファイルを選択してください');
+            return;
+        }
+
+        try {
+            showProcessing('ページ順入替中...', 'ページ順序を変更しています');
+
+            const pageOrder = Array.from(document.getElementById('reorderPages').children)
+                .map(item => parseInt(item.dataset.pageNum));
+
+            // デモ用の処理（実際は/api/pdf/reorderにPOST）
+            await simulateProcessing();
+            downloadDemoFile('reordered.pdf');
+
+        } catch (error) {
+            showError('ページ順入替に失敗しました: ' + error.message);
+        } finally {
+            hideProcessing();
+        }
+    }
+
+    async function executeSplit() {
+        if (currentFiles.length === 0) {
+            showError('分割するファイルを選択してください');
+            return;
+        }
+
+        const ranges = document.getElementById('splitRanges').value.trim();
+        if (!ranges) {
+            showError('分割範囲を入力してください');
+            return;
+        }
+
+        try {
+            showProcessing('PDF分割中...', 'ページ範囲で分割しています');
+
+            // デモ用の処理（実際は/api/pdf/splitにPOST）
+            await simulateProcessing();
+            downloadDemoFile('parts.zip');
+
+        } catch (error) {
+            showError('分割処理に失敗しました: ' + error.message);
+        } finally {
+            hideProcessing();
+        }
+    }
+
+    async function executeOptimize() {
+        if (currentFiles.length === 0) {
+            showError('圧縮するファイルを選択してください');
+            return;
+        }
+
+        try {
+            showProcessing('PDF圧縮中...', 'ファイルを最適化しています');
+
+            const preset = document.querySelector('input[name="optimizePreset"]:checked').value;
+
+            // デモ用の処理（実際は/api/pdf/optimizeにPOST）
+            await simulateProcessing();
+            downloadDemoFile('optimized.pdf');
+
+        } catch (error) {
+            showError('圧縮処理に失敗しました: ' + error.message);
+        } finally {
+            hideProcessing();
+        }
+    }
+
+    // ユーティリティ関数
+    function formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function showProcessing(title, message) {
+        document.getElementById('processingTitle').textContent = title;
+        document.getElementById('processingMessage').textContent = message;
+        document.getElementById('processingModal').classList.remove('hidden');
+    }
+
+    function hideProcessing() {
+        document.getElementById('processingModal').classList.add('hidden');
+    }
+
+    function showError(message) {
+        document.getElementById('errorMessage').textContent = message;
+        document.getElementById('errorModal').classList.remove('hidden');
+    }
+
+    function closeErrorModal() {
+        document.getElementById('errorModal').classList.add('hidden');
+    }
+
+    async function simulateProcessing() {
+        // デモ用の処理時間シミュレーション
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    function downloadDemoFile(filename) {
+        // デモ用のダウンロード（実際はサーバーからのレスポンスを処理）
+        const link = document.createElement('a');
+        link.href = 'data:application/pdf;base64,JVBERi0xLjQKJdPr6eEKMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovUGFnZXMgMiAwIFIKPj4KZW5kb2JqCjIgMCBvYmoKPDwKL1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDEKPD4KZW5kb2JqCjMgMCBvYmoKPDwKL1R5cGUgL1BhZ2UKL1BhcmVudCAyIDAgUgovTWVkaWFCb3ggWzAgMCA2MTIgNzkyXQo+PgplbmRvYmoKeHJlZgowIDQKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAp0cmFpbGVyCjw8Ci9TaXplIDQKL1Jvb3QgMSAwIFIKPj4Kc3RhcnR4cmVmCjE3NAolJUVPRgo=';
+        link.download = filename;
+        link.click();
+    }
+
+    // CSS for tab styling
+    const style = document.createElement('style');
+    style.textContent = `
+            .tab-btn {
+                display: flex;
+                align-items: center;
+                padding: 0.5rem 1rem;
+                font-size: 0.875rem;
+                font-weight: 500;
+                color: #6b7280;
+                border-bottom: 2px solid transparent;
+                transition: all 0.2s ease;
+            }
+            .tab-btn:hover {
+                color: #374151;
+            }
+            .tab-btn.active {
+                color: #2563eb;
+                border-bottom-color: #2563eb;
+            }
+        `;
+    document.head.appendChild(style);
+</script>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'98d6c318f35329db',t:'MTc2MDI3MzgzNy4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
