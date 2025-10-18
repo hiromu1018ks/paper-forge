@@ -64,10 +64,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to set up jobs: %v", err)
 	}
-	defer func() {
-		_ = jobManager.Shutdown(context.Background())
-	}()
-	jobManager.StartWorkers()
+	if jobManager != nil {
+		defer func() {
+			_ = jobManager.Shutdown(context.Background())
+		}()
+		jobManager.StartWorkers()
+	} else {
+		log.Printf("Starting without Redis-backed job queue; large PDF処理は同期モードで動作します")
+	}
 
 	// ルーティングの設定
 	setupRoutes(router, cfg, pdfService, jobManager)
@@ -116,7 +120,10 @@ func setupRoutes(router *gin.Engine, cfg *config.Config, pdfService *pdf.Service
 		protected := api.Group("")
 		protected.Use(authManager.RequireLogin(), authManager.VerifyCSRF())
 		{
-			scheduler := &pdfJobScheduler{manager: jobManager}
+			var scheduler pdf.JobScheduler
+			if jobManager != nil {
+				scheduler = &pdfJobScheduler{manager: jobManager}
+			}
 			handlerOpts := pdf.HandlerOptions{
 				Scheduler:           scheduler,
 				AsyncThresholdBytes: cfg.AsyncThresholdBytes,
@@ -131,8 +138,13 @@ func setupRoutes(router *gin.Engine, cfg *config.Config, pdfService *pdf.Service
 				pdfRoutes.POST("/optimize", pdf.OptimizeHandler(pdfService, handlerOpts))
 			}
 
-			protected.GET("/jobs/:id", jobStatusHandler(jobManager))
-			protected.GET("/jobs/:id/download", jobDownloadHandler(pdfService))
+			if jobManager != nil {
+				protected.GET("/jobs/:id", jobStatusHandler(jobManager))
+				protected.GET("/jobs/:id/download", jobDownloadHandler(pdfService))
+			} else {
+				protected.GET("/jobs/:id", jobsUnavailableHandler())
+				protected.GET("/jobs/:id/download", jobsUnavailableHandler())
+			}
 		}
 	}
 }

@@ -24,6 +24,9 @@ type pdfJobScheduler struct {
 }
 
 func (s *pdfJobScheduler) Schedule(ctx context.Context, op pdf.OperationType, jobID string) error {
+	if s == nil || s.manager == nil {
+		return fmt.Errorf("asynchronous job processing is disabled")
+	}
 	_, err := s.manager.Enqueue(ctx, &jobs.TaskPayload{
 		JobID:     jobID,
 		Operation: op,
@@ -38,6 +41,11 @@ func setupJobs(cfg *config.Config, pdfService *pdf.Service) (*jobs.Manager, erro
 	}
 
 	redisClient := redis.NewClient(opt)
+	if err := redisClient.Ping(context.Background()).Err(); err != nil {
+		log.Printf("[WARN] Redis に接続できないため、非同期ジョブ機能を無効化します: %v", err)
+		_ = redisClient.Close()
+		return nil, nil
+	}
 	ttlMinutes := cfg.JobExpireMinutes
 	if ttlMinutes <= 0 {
 		ttlMinutes = 10
@@ -48,6 +56,15 @@ func setupJobs(cfg *config.Config, pdfService *pdf.Service) (*jobs.Manager, erro
 		return nil, err
 	}
 	return manager, nil
+}
+
+func jobsUnavailableHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"code":    "JOBS_DISABLED",
+			"message": "非同期ジョブ機能が無効化されています。Redis を起動してサーバーを再起動してください。",
+		})
+	}
 }
 
 func jobStatusHandler(manager *jobs.Manager) gin.HandlerFunc {
