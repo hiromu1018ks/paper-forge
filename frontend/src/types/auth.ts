@@ -8,12 +8,22 @@ export interface User {
 }
 
 // 認証状態
+export interface LoginFeedback {
+  message: string;
+  remainingAttempts?: number;
+  retryAfterSeconds?: number;
+}
+
 export interface AuthState {
   isLoggedIn: boolean;
   user: User | null;
   csrfToken: string | null;
-  login: (username: string, token: string) => void;
+  loginFeedback: LoginFeedback | null;
+  login: (params: { username: string; csrfToken: string }) => void;
   logout: () => void;
+  setCsrfToken: (token: string | null) => void;
+  recordLoginFailure: (feedback: LoginFeedback) => void;
+  clearLoginFeedback: () => void;
 }
 
 // ログインリクエスト
@@ -23,6 +33,7 @@ export interface LoginRequest {
 }
 
 // ログインレスポンス
-export interface LoginResponse {
-  // CSRFトークンはヘッダーで返却される想定
+export interface LoginSuccess {
+  csrfToken: string;
+  username: string;
 }

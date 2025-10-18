@@ -17,33 +17,65 @@ export const useAuthStore = create<AuthState>()(
       isLoggedIn: false,
       user: null,
       csrfToken: null,
+      loginFeedback: null,
 
       /**
-       * ログイン処理
-       * @param username - ユーザー名
-       * @param token - CSRFトークン
+       * ログイン成功時にセッション情報を保存
        */
-      login: (username: string, token: string) => {
+      login: ({ username, csrfToken }) => {
         set({
           isLoggedIn: true,
           user: { username },
-          csrfToken: token,
+          csrfToken,
+          loginFeedback: null,
         });
       },
 
       /**
-       * ログアウト処理
+       * セッション終了時の状態リセット
        */
       logout: () => {
         set({
           isLoggedIn: false,
           user: null,
           csrfToken: null,
+          loginFeedback: null,
         });
+      },
+
+      /**
+       * サーバーから受け取った最新の CSRF トークンを保存
+       */
+      setCsrfToken: (token) => {
+        set({ csrfToken: token });
+      },
+
+      /**
+       * ログイン失敗時のエラーメッセージ・残り回数を保持
+       */
+      recordLoginFailure: (feedback) => {
+        set({
+          loginFeedback: feedback,
+          isLoggedIn: false,
+          user: null,
+          csrfToken: null,
+        });
+      },
+
+      /**
+       * 画面表示後にエラーメッセージをクリア
+       */
+      clearLoginFeedback: () => {
+        set({ loginFeedback: null });
       },
     }),
     {
-      name: 'auth-storage', // localStorage のキー名
+      name: 'auth-storage',
+      partialize: (state) => ({
+        isLoggedIn: state.isLoggedIn,
+        user: state.user,
+        csrfToken: state.csrfToken,
+      }),
     }
   )
 );
