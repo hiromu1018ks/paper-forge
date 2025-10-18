@@ -1,0 +1,51 @@
+# Go関連
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+vendor/
+
+# Node関連
+node_modules/
+dist/
+dist-ssr/
+*.local
+.pnpm-debug.log*
+.yarn-integrity
+.cache/
+
+# 環境変数
+.env
+.env.local
+.env.*.local
+.env.production
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# 一時ファイル
+/tmp/
+*.tmp
+*.temp
+
+# ビルド成果物
+/backend/app
+/backend/bin/
+/frontend/build/
+coverage/
+*.cover
+*.coverage
