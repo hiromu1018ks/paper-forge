@@ -13,6 +13,7 @@ import (
 
 	"github.com/yourusername/paper-forge/internal/auth"
 	"github.com/yourusername/paper-forge/internal/config"
+	"github.com/yourusername/paper-forge/internal/pdf"
 )
 
 func main() {
@@ -82,6 +83,10 @@ func setupRoutes(router *gin.Engine, cfg *config.Config) {
 	router.GET("/health", handleHealth)
 
 	authManager := auth.NewManager(cfg)
+	pdfService := pdf.NewService(cfg)
+
+	// 大きなPDFを扱うため、multipartの読み込み上限を設定値に合わせて引き上げる
+	router.MaxMultipartMemory = pdf.MaxUploadTotalBytes + cfg.MaxFileSize
 
 	api := router.Group("/api")
 	{
@@ -100,7 +105,10 @@ func setupRoutes(router *gin.Engine, cfg *config.Config) {
 		protected := api.Group("")
 		protected.Use(authManager.RequireLogin(), authManager.VerifyCSRF())
 		{
-			// TODO: /api/pdf/* 系の実装を追加する
+			pdfRoutes := protected.Group("/pdf")
+			{
+				pdfRoutes.POST("/merge", pdf.MergeHandler(pdfService))
+			}
 		}
 	}
 }

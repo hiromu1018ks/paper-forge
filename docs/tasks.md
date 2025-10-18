@@ -8,9 +8,9 @@
   実装方針: `docs/03_ui_spec.md` に沿って Vite + React + TypeScript プロジェクトを生成し、React Router、Zustand、TanStack Query、Axios、React Hook Form を導入して画面遷移・状態管理・フォーム送信を支える。`design.html` を参照しつつベースレイアウトと共通コンポーネント（ボタン、カード、モーダル）を整える。参照: `docs/03_ui_spec.md`, `docs/design.html`.
 - [x] バックエンドAPIサーバーの雛形実装  
   実装方針: `docs/02_basic_design.md` の構成に合わせて Gin を初期化し、`cmd/api/main.go` と `internal/{auth,pdf,jobs,storage}` の空実装を用意する。ローカル開発では GCS の代わりに `/tmp/app/<jobId>/` を使う設定を `config` パッケージに定義し、CORS・セッション・CSRF ミドルウェアを差し込む。参照: `docs/02_basic_design.md`, `docs/04_api_spec.md`.
-- [ ] ローカル開発用の認証・セッション処理  
+- [x] ローカル開発用の認証・セッション処理  
   実装方針: `docs/04_api_spec.md` の `/auth/login` と `/auth/logout` を実装し、`APP_USERNAME` と `APP_PASSWORD_HASH` を使って bcrypt 照合する。`gin-contrib/sessions` で `Secure; HttpOnly; SameSite=Strict` なクッキーを発行し、`github.com/utrack/gin-csrf` で `X-CSRF-Token` を返す。参照: `docs/01_requirements.md`, `docs/04_api_spec.md`.
-- [ ] PDF結合API（同期処理）の実装  
+- [x] PDF結合API（同期処理）の実装  
   実装方針: 要件定義の 5.1 に従い `POST /pdf/merge` の `multipart/form-data` を実装し、アップロードファイルを一時ディレクトリへ保存して pdfcpu の Merge API を呼び出す。処理前にファイルサイズとページ数を検証し、生成ファイルはストリームで返す。`JOB_EXPIRE_MINUTES` に従って一時ファイル削除ジョブを仕込む。参照: `docs/01_requirements.md`, `docs/04_api_spec.md`.
 - [ ] フロントエンドのログイン〜結合フロー  
   実装方針: 画面仕様 S-01〜S-03 をもとにログインフォーム、ダッシュボード、結合画面を作成し、Zustand で `auth` と `workspace` ストアを用意する。Axios で `/auth/login` と `/pdf/merge` を呼び出し、プログレスバーは同期完了までの疑似ステップ (`load/process/write`) を表示する。参照: `docs/03_ui_spec.md`, `docs/04_api_spec.md`.
