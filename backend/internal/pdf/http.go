@@ -45,6 +45,11 @@ type OptimizeService interface {
 	PrepareOptimizeJob(ctx context.Context, file *multipart.FileHeader, preset OptimizePreset) (*JobManifest, error)
 }
 
+// InspectService はPDFメタデータを取得する機能を提供します。
+type InspectService interface {
+	InspectMultipart(ctx context.Context, file *multipart.FileHeader) (*InspectResult, error)
+}
+
 // JobScheduler はジョブを非同期キューに投入するためのインターフェースです。
 type JobScheduler interface {
 	Schedule(ctx context.Context, op OperationType, jobID string) error
@@ -298,6 +303,38 @@ func OptimizeHandler(svc OptimizeService, opts HandlerOptions) gin.HandlerFunc {
 		if err := streamResult(c, result, "圧縮結果の読み込みに失敗しました"); err != nil {
 			respondWithError(c, err)
 		}
+	}
+}
+
+// InspectHandler は POST /api/pdf/inspect のハンドラーを返します。
+func InspectHandler(svc InspectService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		form, err := c.MultipartForm()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_INPUT",
+				"message": "multipart/form-data でPDFファイルを送信してください。",
+			})
+			return
+		}
+		defer form.RemoveAll()
+
+		file, err := extractSingleFile(form)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_INPUT",
+				"message": err.Error(),
+			})
+			return
+		}
+
+		result, err := svc.InspectMultipart(c.Request.Context(), file)
+		if err != nil {
+			respondWithError(c, err)
+			return
+		}
+
+		c.JSON(http.StatusOK, result)
 	}
 }
 

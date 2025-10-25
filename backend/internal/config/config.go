@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/joho/godotenv"
@@ -47,7 +48,7 @@ type Config struct {
 // .env.local ファイルが存在する場合はそこから読み込みます。
 func Load() (*Config, error) {
 	// .env.local ファイルを読み込む（存在しない場合はスキップ）
-	_ = godotenv.Load(".env.local")
+	loadEnvFile()
 
 	config := &Config{
 		// アプリケーション設定
@@ -88,6 +89,24 @@ func Load() (*Config, error) {
 	}
 
 	return config, nil
+}
+
+func loadEnvFile() {
+	if err := godotenv.Load(".env.local"); err == nil {
+		return
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+
+	parent := filepath.Dir(cwd)
+	if parent == "" || parent == cwd {
+		return
+	}
+
+	_ = godotenv.Load(filepath.Join(parent, ".env.local"))
 }
 
 // Validate は設定の妥当性を検証します。

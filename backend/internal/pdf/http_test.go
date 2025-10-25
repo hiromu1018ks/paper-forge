@@ -63,6 +63,18 @@ func (s *stubScheduler) Schedule(ctx context.Context, op OperationType, jobID st
 	return s.err
 }
 
+type stubInspectService struct {
+	result *InspectResult
+	err    error
+}
+
+func (s *stubInspectService) InspectMultipart(ctx context.Context, file *multipart.FileHeader) (*InspectResult, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.result, nil
+}
+
 func TestParseOrderJSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -212,6 +224,101 @@ func TestMergeHandlerLimitExceeded(t *testing.T) {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 	if payload["code"] != "LIMIT_EXCEEDED" {
+		t.Fatalf("unexpected code: %s", payload["code"])
+	}
+}
+
+func TestInspectHandlerSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service := &stubInspectService{
+		result: &InspectResult{
+			Source: SourceFileMeta{
+				Name:  "input.pdf",
+				Size:  1234,
+				Pages: 7,
+			},
+		},
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	fileWriter, err := writer.CreateFormFile("file", "input.pdf")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	if _, err := io.Copy(fileWriter, bytes.NewReader([]byte("%PDF-1.4\n"))); err != nil {
+		t.Fatalf("failed to write dummy file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pdf/inspect", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	router := gin.New()
+	router.POST("/api/pdf/inspect", InspectHandler(service))
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload InspectResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if payload.Source.Pages != 7 {
+		t.Fatalf("unexpected pages: %d", payload.Source.Pages)
+	}
+	if payload.Source.Name != "input.pdf" {
+		t.Fatalf("unexpected name: %s", payload.Source.Name)
+	}
+	if payload.Source.Size != 1234 {
+		t.Fatalf("unexpected size: %d", payload.Source.Size)
+	}
+}
+
+func TestInspectHandlerError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service := &stubInspectService{
+		err: &Error{Code: "UNSUPPORTED_PDF", Message: "not a pdf"},
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	fileWriter, err := writer.CreateFormFile("file", "input.txt")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	if _, err := io.Copy(fileWriter, bytes.NewReader([]byte("INVALID"))); err != nil {
+		t.Fatalf("failed to write dummy file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pdf/inspect", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	router := gin.New()
+	router.POST("/api/pdf/inspect", InspectHandler(service))
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if payload["code"] != "UNSUPPORTED_PDF" {
 		t.Fatalf("unexpected code: %s", payload["code"])
 	}
 }

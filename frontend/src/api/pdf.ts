@@ -161,3 +161,18 @@ export interface OptimizeMeta {
   preset: OptimizePreset;
   source: SourceFileMeta;
 }
+
+export interface InspectResponse {
+  source: SourceFileMeta;
+}
+
+export const inspectPdf = async (file: File): Promise<InspectResponse> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const response = await apiClient.post<InspectResponse>('/pdf/inspect', formData);
+    return response.data;
+  } catch (error) {
+    throw toApiError(error);
+  }
+};

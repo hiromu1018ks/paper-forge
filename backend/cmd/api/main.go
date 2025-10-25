@@ -132,6 +132,7 @@ func setupRoutes(router *gin.Engine, cfg *config.Config, pdfService *pdf.Service
 
 			pdfRoutes := protected.Group("/pdf")
 			{
+				pdfRoutes.POST("/inspect", pdf.InspectHandler(pdfService))
 				pdfRoutes.POST("/merge", pdf.MergeHandler(pdfService, handlerOpts))
 				pdfRoutes.POST("/reorder", pdf.ReorderHandler(pdfService, handlerOpts))
 				pdfRoutes.POST("/split", pdf.SplitHandler(pdfService, handlerOpts))
